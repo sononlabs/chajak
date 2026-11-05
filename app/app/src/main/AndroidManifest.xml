@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 미디어 세션이 포그라운드에서 도는 동안 알림(재생 컨트롤)을 띄운다. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 음악 녹음: 재생 중인 음악을 마이크가 아니라 소리 그대로 담는다(AudioPlaybackCapture, 매번 사용자 동의) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 말로 주제 넣기: 기기 음성 인식 서비스(Pleos ai.umos.ambientai)를 찾을 수 있어야 한다 -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
+    <!-- 차작 서버는 PC(에뮬레이터에서는 10.0.2.2)에서 HTTP 로 돈다 -->
+    <application
+        android:label="차작"
+        android:icon="@mipmap/ic_chajak_launcher"
+        android:roundIcon="@mipmap/ic_chajak_launcher"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
+        android:usesCleartextTraffic="true"
+        android:appCategory="audio">
+        <uses-library android:name="android.car" android:required="false" />
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|uiMode">
+            <!-- 주행 중에도 듣기 화면은 보여준다. 녹음은 주행 규제가 켜지면 앱이 막는다(21번 시험) -->
+            <meta-data android:name="distractionOptimized" android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Pleos Music/Audio 가이드: Media3 MediaLibraryService.
+            차량 미디어 브라우저(미디어 센터)가 이 서비스를 찾아 라이브러리를 보고,
+            스티어링휠 키와 음성 검색(Gleo)이 이 세션으로 들어온다.
+        -->
+        <service
+            android:name=".ChajakMediaService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".CaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+    </application>
+</manifest>

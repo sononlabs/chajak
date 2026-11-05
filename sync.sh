@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# 작업 폴더(앱·서버·ComfyUI 노드)에서 이 저장소로 필요한 파일만 가져온다.
+# 빌드 산출물·로컬 설정·사용자 곡과 녹음(storage)·시험 결과는 가져오지 않는다.
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+APP="${APP:-$here/../chajak-app}"
+SERVER="${SERVER:-$here/../chajak-server}"
+NODE="${NODE:-/f/StabilityMatrix-win-x64/Data/Packages/ComfyUI/custom_nodes/pleos_melody_instrument}"
+
+copy() {  # copy <원본> <대상> <제외…>
+  local src="$1" dst="$2"; shift 2
+  local ex=(); for e in "$@"; do ex+=(--exclude="$e"); done
+  rm -rf "$dst"; mkdir -p "$dst"
+  tar -C "$src" "${ex[@]}" -cf - . | tar -C "$dst" -xf -
+}
+
+copy "$APP" "$here/app" build .gradle .kotlin local.properties '*.iml' .idea .probe
+copy "$SERVER" "$here/server" storage test_output __pycache__ '*.pyc'
+copy "$NODE" "$here/comfyui-node/pleos_melody_instrument" __pycache__ '*.pyc'
+echo "동기화 끝: app · server · comfyui-node"

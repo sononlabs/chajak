@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ic_mic 에 사선을 더한 녹음 불가 표시(주행 중) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:strokeColor="#FF000000" android:strokeWidth="3.6" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M18.8,13 A5.2,5.2 0 0,1 29.2,13 L29.2,21 A5.2,5.2 0 0,1 18.8,21 Z" />
+    <path android:strokeColor="#FF000000" android:strokeWidth="3.6" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M12,20.5 L12,21.5 A12,12 0 0,0 36,21.5 L36,20.5 M24,33.5 L24,40.5 M18,40.5 L30,40.5 M9,7 L39,41" />
+</vector>

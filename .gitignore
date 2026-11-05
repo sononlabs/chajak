@@ -1,0 +1,12 @@
+# 빌드 산출물·로컬 설정
+build/
+.gradle/
+.kotlin/
+local.properties
+*.iml
+.idea/
+__pycache__/
+*.pyc
+# 사용자 곡·녹음, 시험 결과
+server/storage/
+server/test_output/
