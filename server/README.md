@@ -1,6 +1,6 @@
 # 차작 서버 (chajak-server)
 
-차량 앱이 허밍 녹음을 올리면 음표로 바꿔 연주하고(내 멜로디), 그 한 소절을 2분짜리 노래(가사·앨범 표지·노래)로 만들어 돌려주는 HTTP API입니다. 생성 엔진은 같은 PC에서 도는 ComfyUI(`pleos_melody_instrument` 노드 + SheetSage2 + YuE2 + Z-Image)와 Ollama 로컬 LLM(`qwen3:14b`, 가사·말로 바꾸기)이고, 이 서버는 그 앞에서 요청·저장·믹스·작업 관리를 맡습니다.
+차량 앱이 허밍 녹음을 올리면 음표로 바꿔 연주하고(내 멜로디), 그 한 소절을 2분짜리 노래(가사·앨범 표지·노래)로 만들어 돌려주는 HTTP API입니다. 생성 엔진은 같은 PC에서 도는 ComfyUI(`pleos_melody_instrument` 노드 + SheetSage2 + YuE2 + Z-Image)와 Ollama 로컬 LLM(`gemma3:12b`, 가사·말로 바꾸기. `CHAJAK_LYRICS_MODEL` 로 바꿀 수 있음)이고, 이 서버는 그 앞에서 요청·저장·믹스·작업 관리를 맡습니다.
 
 > YuE2 는 비상업(CC BY-NC) 라이선스라 공모전 시연용입니다. 상용은 다른 엔진으로 바꿉니다.
 

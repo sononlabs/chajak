@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import types
 
 import aiohttp
 
-from lyrics import MODEL, OLLAMA
+from lyrics import OLLAMA
+
+# 가사는 gemma3 로 바꿨지만(한국어), 음계 숫자 다루기는 지금까지 시험한 qwen3 를 그대로 쓴다
+MODEL = os.environ.get("CHAJAK_MELODY_MODEL", "qwen3:14b")
 from melody_notes import NODES
 
 _pkg = types.ModuleType("pleos_nodes")

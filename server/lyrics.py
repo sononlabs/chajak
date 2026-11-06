@@ -1,4 +1,4 @@
-"""주제(프롬프트) → 노래 제목 · 스타일 태그 · 가사. 이 PC 의 Ollama(qwen3:14b)로 만든다(외부 API 없음).
+"""주제(프롬프트) → 노래 제목 · 스타일 태그 · 가사. 이 PC 의 Ollama(gemma3:12b, CHAJAK_LYRICS_MODEL)로 만든다(외부 API 없음).
 
 가사 줄 수·줄마다 음절 목표는 2분 곡 계획(PleosSongForm plan)에서 온다: 2마디가 가사 한 줄, 그 2마디 음 개수가 음절 목표.
 한국어는 한 음에 한 음절이 기본이라 음절 수를 맞추면 노래가 멜로디에 잘 붙는다.
@@ -7,13 +7,15 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import random
 
 import aiohttp
 
 OLLAMA = os.environ.get("CHAJAK_OLLAMA", "http://127.0.0.1:11434")
-MODEL = os.environ.get("CHAJAK_LYRICS_MODEL", "qwen3:14b")
+# 2026-11-06 비교: gemma3:12b 가 한국어 가사·말로 바꾸기 모두 qwen3:14b·exaone3.5 보다 자연스러움
+MODEL = os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b")
 
 # 주사위 주제(직접 쓴 문장). 차 안 상황 + 분위기 + 장르.
 THEMES = [
@@ -66,7 +68,10 @@ def _prompt(theme: str, targets: dict) -> str:
 
 
 def _line(x) -> str:
-    return str(x.get("t", "") if isinstance(x, dict) else x).strip()
+    """가사 한 줄 정리. 모델이 프롬프트의 글자 수 표시 '(9)'·나눔 표시 '/'·'⁄' 를 따라 적는 경우가 있어 지운다(gemma3, 2026-11-06)."""
+    t = str(x.get("t", "") if isinstance(x, dict) else x)
+    t = re.sub(r"\(\s*\d+\s*\)|[/⁄|]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 async def _ask(session: aiohttp.ClientSession, prompt: str, seed: int, keep: str | int = 0, temperature: float = 0.8) -> dict:
@@ -209,9 +214,10 @@ def _edit_prompt(request: str, current: dict) -> str:
         '{"style_add": 더할 영어 스타일 태그(쉼표, 없으면 ""), "style_remove": 뺄 영어 태그(쉼표, 없으면 ""), '
         '"style_weight": 0~100 또는 null(장르 색을 진하게=높게), "melody_weight": 0~100 또는 null(내 멜로디를 살려=80 이상, 멜로디를 새롭게=50), '
         '"voice": "auto"|"female"|"male"|"none"(연주곡) 또는 null, "seconds": 60|120|180 또는 null, '
-        '"new_lyrics": 가사를 새로 써야 하면 true, "new_theme": 주제를 바꿔야 하면 새 주제 한국어 한 문장 아니면 null, '
+        '"new_lyrics": 가사를 새로 써야 하면 true, "new_theme": 주제를 바꾸라고 했을 때만 새 주제(짧은 한국어 구, 예: "바닷가 여행") 아니면 null, '
         '"summary": 이번에 바꾼 것을 사용자에게 알려 줄 한국어 한 문장(~했어요)}\n'
-        "요청에 없는 것은 null 로 둬(지금 값을 다시 적지 마). '멜로디는 살려'면 melody_weight 를 80 이상으로.\n"
+        "요청에 없는 것은 null 로 둬(지금 값을 다시 적지 마). 요청에 없는 분위기 태그도 더하지 마. '멜로디는 살려'면 melody_weight 를 80 이상으로.\n"
+        "'내 멜로디가 잘 안 들려'·'내가 부른 거랑 달라'처럼 멜로디가 약하다는 말이면 melody_weight 를 지금보다 15 이상 올려(최대 100).\n"
         "분위기 말(잔잔하게·신나게·어둡게·몽환적으로 등)은 영어 분위기·템포 태그(calm, mellow, upbeat, energetic, dark, dreamy 등)로 style_add 에 넣어. "
         "악기를 빼라면 그 악기 영어 이름을 style_remove 에."
     )
@@ -232,13 +238,16 @@ async def interpret_edit(request: str, current: dict, seed: int) -> dict:
     low = request.lower()
     said_voice = any(w in low for w in ("목소리", "보컬", "남자", "여자", "남성", "여성", "연주곡", "가사 없이", "voice", "vocal", "male", "female", "instrumental"))
     said_len = any(w in low for w in ("분", "길게", "짧게", "길이", "minute", "longer", "shorter"))
+    said_words = any(w in low for w in ("가사", "주제", "이야기", "내용", "노랫말", "lyric"))
     voice = out.get("voice") if said_voice and out.get("voice") in ("auto", "female", "male", "none") and out.get("voice") != current.get("voice") else None
     seconds = out.get("seconds") if said_len and out.get("seconds") in (60, 120, 180) and out.get("seconds") != current.get("seconds") else None
     theme = str(out.get("new_theme") or "").strip() or None
+    if theme and (theme == current.get("theme") or len(theme) > 40 or theme.endswith(("습니다.", "했어요.", "어요.", "요."))):
+        theme = None if theme == current.get("theme") else re.sub(r"(으로|로)? ?(가사를 )?(바꿨|변경했|바꾸었)\S*$", "", theme.rstrip(".")).strip() or None
     same = lambda k: (lambda v: None if v is None or v == current.get(k) else v)(clamp(out.get(k), 0, 100))
     return {"style_add": str(out.get("style_add") or "").strip(), "style_remove": str(out.get("style_remove") or "").strip(),
             "style_weight": same("style_weight"), "melody_weight": same("melody_weight"),
-            "voice": voice, "seconds": seconds, "new_lyrics": bool(out.get("new_lyrics")) or theme is not None, "new_theme": theme,
+            "voice": voice, "seconds": seconds, "new_lyrics": said_words and (bool(out.get("new_lyrics")) or theme is not None), "new_theme": theme if said_words else None,
             "summary": str(out.get("summary") or "").strip() or _summary(out, voice, seconds, theme)}
 
 
@@ -284,7 +293,7 @@ LYRIC_CRAFT = (
     "- 같은 구간의 줄 끝소리를 비슷하게 맞추면(~해/~해, ~네/~네) 부르기 좋다.\n"
     f"- 흔한 말은 피한다: {CLICHES}.\n"
     "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다.\n"
-    "예(형식만 참고, 그대로 쓰지 마): 절 '와이퍼가 박자 맞춰'(8) / '빨간불에 멈춘 숨'(7) · 후렴 훅 '괜찮아 오늘도'(6) / '집으로 가는 길'(6)."
+    "예(형식만 참고. 이 예의 낱말·문장은 절대 쓰지 마): 절 '와이퍼가 박자 맞춰'(8) / '빨간불에 멈춘 숨'(7)."
 )
 
 
