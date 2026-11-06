@@ -195,7 +195,7 @@ def _option(fields: dict, name: str, allowed, default):
 
 
 async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, instrument: str,
-                        melody: str, accompaniment: bool, song: dict | None) -> tuple[dict, bytes]:
+                        melody: str, accompaniment: bool, song: dict | None, music: bool = False) -> tuple[dict, bytes]:
     """song 이 있으면 쌓기 트랙: 먼저 악보만 뽑아 부른 템포·조성을 보고 곡 박자·조성에 맞춰 연주한다."""
     cf: C.Comfy = app["comfy"]
     if instrument not in app["instruments"]:
@@ -206,11 +206,11 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
     hummed_tempo, tempo, transpose = None, 0, 0
     try:
         if song:
-            hummed_tempo, hummed_key = C.abc_header(C.text(await cf.run(C.melody_graph(name, melody), front=True), "abc_out"))
+            hummed_tempo, hummed_key = C.abc_header(C.text(await cf.run(C.melody_graph(name, melody, music), front=True), "abc_out"))
             tempo = C.fit_tempo(song["tempo"], hummed_tempo)
             transpose = C.fit_key(song["key"], hummed_key)
         outputs = await cf.run(C.track_graph(name, instrument, melody, accompaniment, tempo,
-                                             f"chajak_server/{song_id}_{n}", transpose), front=True)
+                                             f"chajak_server/{song_id}_{n}", transpose, music), front=True)
     except C.ComfyError as e:
         if e.kind in HUM_ERRORS:
             raise ApiError(422, *HUM_ERRORS[e.kind]) from e
@@ -246,11 +246,12 @@ async def create_song(request):
     data, filename, f = await _form(request)
     melody = _option(f, "melody", ("그대로", "다듬기"), "그대로")
     accompaniment = _option(f, "accompaniment", ("true", "false"), "true") == "true"
+    source = _option(f, "input", ("hum", "music"), "hum")
     song_id = uuid.uuid4().hex[:12]
     track, audio = await _render_track(request.app, song_id, 1, data, filename,
-                                       f.get("instrument", C.DEFAULT_INSTRUMENT), melody, accompaniment, None)
+                                       f.get("instrument", C.DEFAULT_INSTRUMENT), melody, accompaniment, None, source == "music")
     track["mode"] = "overlay"
-    track["input"] = _option(f, "input", ("hum", "music"), "hum")
+    track["input"] = source
     store: Store = request.app["store"]
     song = {"id": song_id, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "tempo": track["tempo"], "key": track["key"],
             "tracks": [track], "ai": None}
@@ -271,13 +272,14 @@ async def add_track(request):
     data, filename, f = await _form(request)
     mode = _option(f, "mode", TRACK_MODES, "overlay")
     melody = _option(f, "melody", ("그대로", "다듬기"), "그대로")
+    source = _option(f, "input", ("hum", "music"), "hum")
     async with store.lock(song_id):
         song = store.load(song_id)
         n = len(song["tracks"]) + 1
         track, audio = await _render_track(request.app, song_id, n, data, filename,
-                                           f.get("instrument", C.DEFAULT_INSTRUMENT), melody, False, song)
+                                           f.get("instrument", C.DEFAULT_INSTRUMENT), melody, False, song, source == "music")
         track["mode"] = mode
-        track["input"] = _option(f, "input", ("hum", "music"), "hum")
+        track["input"] = source
         (store.dir(song_id) / f"hum{n}").with_suffix(Path(filename).suffix or ".wav").write_bytes(data)
         return _append_track(store, store.load(song_id), track, audio)
 

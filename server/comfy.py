@@ -123,9 +123,9 @@ def text(outputs: dict, node: str) -> str:
     return t[0] if t else ""
 
 
-def melody_graph(upload_name: str, melody: str) -> dict:
+def melody_graph(upload_name: str, melody: str, music: bool = False) -> dict:
     """악보만 뽑는 그래프. 같은 입력으로 track_graph 를 이어 돌리면 ComfyUI 캐시로 앞부분은 다시 계산하지 않는다."""
-    return _melody_front(upload_name, MELODY_FREEDOM[melody])
+    return _melody_front(upload_name, MELODY_FREEDOM[melody], music)
 
 
 def fit_tempo(song_tempo: float, hummed_tempo: float) -> int:
@@ -151,12 +151,15 @@ def fit_key(song_key: str, track_key: str) -> int:
     return shift - 12 if shift > 5 else shift
 
 
-def _melody_front(upload_name: str, freedom: float) -> dict:
-    """녹음 → 허밍 정리 → SheetSage2 악보 → 자유도(멜로디를 Ins 성부로 옮기고 다듬기)."""
+def _melody_front(upload_name: str, freedom: float, music: bool = False) -> dict:
+    """녹음 → 허밍 정리 → SheetSage2 악보 → 자유도(멜로디를 Ins 성부로 옮기고 다듬기).
+    music: 듣던 음악을 녹음한 것 — 허밍 정리의 음성 구간 잘라내기·잡음 제거·음량 맞춤을 건너뛰고 짧으면 반복만 한다.
+    완성곡은 조용한 구간이 없어 잘라내기 기준(잡음 바닥 + 18dB)에 걸리고, SheetSage2 는 원래 반주 섞인 곡에서 멜로디를 뽑는다."""
+    prep_mode = "반복만" if music else "전처리 + 반복 (권장)"
     return {
         "load": {"class_type": "LoadAudio", "inputs": {"audio": upload_name}},
         "enc": {"class_type": "AudioEncoderLoader", "inputs": {"audio_encoder_name": "sheetsage2_bf16.safetensors"}},
-        "prep": {"class_type": "PleosPrepareHum", "inputs": {"audio": ["load", 0], "mode": "전처리 + 반복 (권장)", "min_seconds": 12.0, "target_db": -22.0, "denoise": True, "vad_margin_hi": 18}},
+        "prep": {"class_type": "PleosPrepareHum", "inputs": {"audio": ["load", 0], "mode": prep_mode, "min_seconds": 12.0, "target_db": -22.0, "denoise": True, "vad_margin_hi": 18}},
         "sheet": {"class_type": "SheetSage2AudioToABC", "inputs": {"audio_encoder": ["enc", 0], "audio": ["prep", 0], "mode": "melody"}},
         "free": {"class_type": "PleosMelodyFreedom", "inputs": {"abc": ["sheet", 0], "freedom": freedom}},
         "prep_info": {"class_type": "PreviewAny", "inputs": {"source": ["prep", 1]}},
@@ -180,9 +183,9 @@ def _render(p: dict, abc_ref: list, instrument: str, accompaniment: bool, tempo:
 
 
 def track_graph(upload_name: str, instrument: str, melody: str, accompaniment: bool, tempo: int, prefix: str,
-                transpose: int = 0) -> dict:
+                transpose: int = 0, music: bool = False) -> dict:
     """한 트랙. 쌓기 트랙은 tempo·transpose 로 곡 박자·조성에 맞춘다. tempo 0 이면 악보 템포."""
-    p = _melody_front(upload_name, MELODY_FREEDOM[melody])
+    p = _melody_front(upload_name, MELODY_FREEDOM[melody], music)
     return _render(p, ["free", 0], instrument, accompaniment, tempo, transpose, prefix)
 
 

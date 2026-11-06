@@ -550,7 +550,8 @@ class MainActivity : Activity() {
     private fun setHearing(state: Hearing) {
         if (state == hearingState && hearing.text.isNotEmpty()) return
         hearingState = state
-        hearing.text = state.message
+        // 음악에서 따기는 흥얼거리는 게 아니라 재생 소리를 담는다 — 문구만 음악용으로(2026-11-07 "흥얼거려 보세요"가 떴다)
+        hearing.text = if (musicCapturing) state.music else state.message
         hearing.setTextColor(if (state == Hearing.VOICE) ACTIVE else TEXT3)
     }
 
@@ -1795,7 +1796,7 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ 동작
 
     /**
-     * 음악 녹음: 듣던 음악을 멈추지 않고, 재생 중인 소리를 그대로 담는다(AudioPlaybackCapture — 녹음마다 동의 창 한 번).
+     * 음악 녹음: 듣던 음악을 멈추지 않고, 재생 중인 소리를 그대로 담는다(AudioPlaybackCapture — 동의 한 번으로 마지막 녹음 뒤 10분).
      * 동의를 못 받거나 차가 지원하지 않으면 차량 마이크로 듣는다. 다 담으면 허밍과 똑같이 음표로 바꿔 트랙·곡이 된다
      * (서버 SheetSage 가 노래 속 멜로디를 뽑는다). 원본은 음악 녹음 보관함에도 남는다.
      * stack: 곡 화면에서 누르면 그 곡에 겹쳐/이어 쌓고, 그 밖에서는 지금 쌓기 방식(stackMode) 그대로.
@@ -1810,6 +1811,36 @@ class MainActivity : Activity() {
         stopPlayback()
         stackMode = stack
         if (android.os.Build.VERSION.SDK_INT < 29) return record(music = true)  // 재생 소리 녹음은 Android 10 부터
+        // 이미 동의받은 게 살아 있으면(마지막 녹음 뒤 10분 안) 다시 묻지 않고 바로 담는다
+        if (projection != null) { ui.removeCallbacks(captureIdle); return record(music = true) }
+        // 시스템 동의 창은 앱이 꾸밀 수 없다(문구·모양 고정) — 그래서 뜨기 전에 우리 화면으로 무엇을 묻는 창인지 먼저 알린다
+        showCapturePrimer()
+    }
+
+    /** 시스템 "녹화 또는 전송" 창 앞의 설명 화면. 2026-11-07 사용자: "너무 갑자기 다른 UI가 나온다". */
+    private fun showCapturePrimer() {
+        show({
+            addView(steps(0))
+            addView(headline("듣던 음악에서 멜로디 따기"))
+            addView(body("지금 재생 중인 노래를 그대로 담아 멜로디를 음표로 바꿔요. 음악은 멈추지 않아요."))
+            addView(column().apply {
+                background = round(SURFACE, 24)
+                setPadding(dp(32), dp(24), dp(32), dp(28))
+                addView(text("다음에 안드로이드 확인 창이 한 번 떠요", BODY_STRONG, TEXT))
+                addView(text("창에는 '녹화 또는 전송'이라고 나오지만, 차작은 화면을 녹화하지 않고 재생 중인 소리만 담아요. " +
+                             "창에 적힌 비밀번호·메시지 같은 화면 정보는 쓰지 않아요.", BODY, TEXT2).withMargin(top = 12))
+                addView(text("'시작하기'를 누르면 바로 녹음이 시작돼요. 차작을 쓰는 동안(마지막 녹음 뒤 10분)은 다시 묻지 않아요.", BODY, TEXT2).withMargin(top = 12))
+            }.withMargin(top = 24, fill = true))
+            addView(caption("남의 노래 멜로디는 연습·참고용으로만 쓰고, 내 노래로 공유하지 마세요.", TEXT3).withMargin(top = 16))
+        }, ::showCapturePrimer, tabs = true) {
+            zones(button("취소") { showHome() },
+                listOf(button("확인 창 열기", Btn.SECONDARY) { requestCapture() }),
+                null)
+        }
+    }
+
+    private fun requestCapture() {
+        if (driving || recording || counting || pending != null || !active) return
         try {
             capturePending = true
             startActivityForResult(projections.createScreenCaptureIntent(), REQ_CAPTURE)
@@ -1847,7 +1878,16 @@ class MainActivity : Activity() {
         begin()
     }
 
+    /** 동의 한 번을 다시 쓰는 시간: 마지막 음악 녹음 뒤 이만큼 안 쓰면 놓는다(상태 표시줄 표시·알림도 꺼진다). */
+    private val captureIdle = Runnable { if (!recording && !counting) stopCapture() }
+
+    private fun holdCapture() {
+        ui.removeCallbacks(captureIdle)
+        ui.postDelayed(captureIdle, CAPTURE_IDLE_MS)
+    }
+
     private fun stopCapture() {
+        ui.removeCallbacks(captureIdle)
         projection?.stop()
         projection = null
         stopService(Intent(this, CaptureService::class.java))
@@ -2274,10 +2314,10 @@ class MainActivity : Activity() {
     /** music: 음악 녹음(포커스 없이, 재생 소리 직접 또는 마이크). 끝나면 허밍과 같은 흐름 + 보관함에 원본. */
     private fun record(music: Boolean = false) {
         val capture = if (music && android.os.Build.VERSION.SDK_INT >= 29) projection else null
+        musicCapturing = music  // showRecording 의 안내 문구가 음악용인지 본다
         showRecording(music, direct = capture != null)
         recording = true
         cancelled = false
-        musicCapturing = music
         if (music) Log.i(tag, "음악 녹음 시작: ${if (capture != null) "재생 소리 직접" else "차량 마이크"}, 포커스 요청 없음")
         val file = File(cacheDir, "hum.wav")
         val take = VoiceRange()
@@ -2333,7 +2373,7 @@ class MainActivity : Activity() {
                 recording = false
                 musicCapturing = false
                 releaseFocus()
-                if (music) stopCapture()
+                if (music) holdCapture()
                 when {
                     stoppedByDriving -> Unit  // 리스너가 이미 안내 화면을 띄움
                     // 취소: 녹음은 버리고 보내지 않는다. 곡 작업 중이었으면 그 곡으로 돌아간다
@@ -2792,10 +2832,10 @@ class MainActivity : Activity() {
     enum class Rec { READY, COUNTDOWN, RECORDING, BUSY, DISABLED }
 
     /** 녹음 중 소리 상태: 아직 안 들림 · 흥얼거림이 들림 · 들리다가 조용해짐. */
-    enum class Hearing(val message: String) {
-        WAITING("흥얼거려 보세요. 잘 들리면 버튼 둘레가 반응해요."),
-        VOICE("●  잘 들려요"),
-        QUIET("조용해졌어요. 다 불렀으면 가운데 버튼을 누르세요."),
+    enum class Hearing(val message: String, val music: String) {
+        WAITING("흥얼거려 보세요. 잘 들리면 버튼 둘레가 반응해요.", "음악을 틀어 주세요. 소리가 들어오면 버튼 둘레가 반응해요."),
+        VOICE("●  잘 들려요", "●  음악이 들어오고 있어요"),
+        QUIET("조용해졌어요. 다 불렀으면 가운데 버튼을 누르세요.", "음악이 멈췄어요. 원하는 부분을 다 담았으면 가운데 버튼을 누르세요."),
     }
 
     /** Pleos Basic button 크기(height · min_width · padding · radius · 글자). */
@@ -2858,6 +2898,7 @@ class MainActivity : Activity() {
         const val FOCUS_DENIED = "지금은 녹음할 수 없어요. 통화나 안내가 끝난 뒤 다시 흥얼거려 주세요."
         const val FOCUS_LOST = "통화나 안내가 끼어들어 녹음을 멈췄어요. 끝난 뒤 다시 흥얼거려 주세요."
         const val REQ_CAPTURE = 6
+        const val CAPTURE_IDLE_MS = 10 * 60 * 1000L
         const val REQ_MUSIC_RECORD = 4
         const val REQ_DRILL = 2
         const val REQ_VOICE = 3
