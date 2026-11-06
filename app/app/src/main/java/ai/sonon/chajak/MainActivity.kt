@@ -354,7 +354,7 @@ class MainActivity : Activity() {
     private fun showMelodyList() {
         show({
             onList = true
-            addView(headline("내 멜로디"))
+            addView(titleRow(headline("내 멜로디"), button("음악 녹음 보관함 ›", size = Size.MEDIUM) { showMusicLibrary() }))
             addView(body(if (library.isEmpty()) "아직 만든 멜로디가 없어요. 녹음실에서 흥얼거려 보세요."
                          else "음표로 바꾼 내 멜로디 ${if (library.size >= LIBRARY_SIZE) "최근 " else ""}${library.size}개 · 눌러서 트랙·음표 보기"))
             library.forEach { item ->
@@ -437,10 +437,6 @@ class MainActivity : Activity() {
                     }.withMargin(top = 16))
                 }
                 addView(rangeCard())
-                addView(row(
-                    text("음악에서 따기: 듣던 노래를 그대로 녹음해 멜로디를 따요. 남의 노래 멜로디는 내 노래로 공유하지 마세요.", BODY_S, TEXT3),
-                ).withMargin(top = 20))
-                addView(button("음악 녹음 보관함", size = Size.MEDIUM) { showMusicLibrary() }.withMargin(top = 12))
             }
         }, ::showHome, tabs = true) {
             zones(
@@ -503,7 +499,7 @@ class MainActivity : Activity() {
         }
         addView(body(when {
             !music -> "다 부르면 가운데 버튼을 누르세요. 녹음 장치: ${inputDevice?.let(InputDevices::label) ?: DEFAULT_INPUT}"
-            direct -> "재생 중인 음악을 그대로 담고 있어요(음악은 멈추지 않아요). 원하는 부분이 끝나면 가운데 버튼을 누르세요."
+            direct -> "재생 중인 음악을 그대로 담고 있어요(음악은 멈추지 않아요). 원하는 부분이 끝나면 가운데 버튼을 누르세요. 남의 노래 멜로디는 내 노래로 공유하지 마세요."
             else -> "차량 마이크로 음악을 듣고 있어요. 원하는 부분이 끝나면 가운데 버튼을 누르세요."
         }).withMargin(top = 12))
         setHearing(Hearing.WAITING)
@@ -828,6 +824,7 @@ class MainActivity : Activity() {
                 showMore = !showMore; refresh()
             }.withMargin(top = 24))
             if (showMore) right.addView(morePanel(idle, count))
+            right.addView(button("새로 흥얼거리기", size = Size.MEDIUM, enabled = idle) { stopPlayback(); song = null; stackMode = null; showHome() }.withMargin(top = 16))
 
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -836,16 +833,28 @@ class MainActivity : Activity() {
             })
         }, { showSong(false) }, tabs = true) {
             val play = s?.let { button(if (playing == "mix") "■  멈춤" else "▶  전체 듣기") { toggle("mix", it.optString("audio_url")) } }
+            val done = s?.optJSONObject("final") != null
             zones(play,
-                listOf(if (s != null && idle) button("노래로 만들기 →", Btn.SECONDARY) { showCreate() }
-                       else recordButton(Rec.BUSY, if (p != null) "음표로 바꾸는 중" else "노래 만드는 중", onClick = null)),
-                button("새로 흥얼거리기", enabled = idle) { stopPlayback(); song = null; stackMode = null; showHome() })
+                listOf(when {
+                    s == null || !idle -> recordButton(Rec.BUSY, if (p != null) "음표로 바꾸는 중" else "노래 만드는 중", onClick = null)
+                    done -> button("완성된 노래 →", Btn.SECONDARY) { showPlayer(false) }
+                    // 버튼 한 번: 오늘 드라이브 주제·자동 목소리로 바로 만든다(주행 중에도 됨). 바꾸고 싶으면 오른쪽 작은 버튼
+                    else -> button("오늘 드라이브로 노래 만들기", Btn.SECONDARY) { quickCreate() }
+                }),
+                if (s != null && idle) button(if (done) "새 버전 만들기" else "주제·목소리 정하기", size = Size.MEDIUM) { showCreate() } else null)
         }
         if (autoplay && s != null) toggle("mix", s.optString("audio_url"))
         trackProgress(s?.optDouble("duration_sec", 0.0)?.toFloat() ?: 0f)
     }
 
     private var showMore = false
+
+    /** 내 멜로디에서 바로 노래 만들기: 이 곡 주제를 아직 안 정했으면 오늘 드라이브로 채우고 곧장 만든다. */
+    private fun quickCreate() {
+        val s = song ?: return
+        if (promptFor != s.optString("id")) { prompt = DriveTheme.now(); themeFromDrive = true; promptFor = s.optString("id") }
+        createFinal()
+    }
 
     /** 더 만들기(접힘): 다음에 얹을 악기 · 겹쳐/이어 부르기 · 변주 · 마지막 트랙 빼기. 주행 중에는 잠근다(정차해서). */
     private fun morePanel(idle: Boolean, count: Int) = column().apply {
@@ -908,9 +917,11 @@ class MainActivity : Activity() {
             addView(steps(2, busy = making))
             addView(headline("노래 만들기"))
             addView(body("${songName(s, "내 멜로디")} · 템포 ${s.optInt("tempo")} · ${keyName(s.optString("key"))} → 2분 노래(가사·앨범 표지)"))
-            if (job != null) {
-                addView(label("만드는 중"))
-                addView(finalPendingRow(job))
+            if (job != null || finalSubmitting) {
+                // 만드는 동안엔 설정 칸을 감추고 진행만 크게(다른 화면을 봐도·주행을 시작해도 계속)
+                addView(label("만드는 중 · 주제: $prompt"))
+                if (job != null) addView(finalPendingRow(job)) else addView(body("서버에 보내는 중이에요…"))
+                return@show
             }
             addView(label("주제"))
             addView(promptRow(enabled = !making))
@@ -1491,14 +1502,35 @@ class MainActivity : Activity() {
                         }.apply { maxLines = 1; gravity = Gravity.CENTER_VERTICAL or Gravity.START }.withMargin(bottom = 12, fill = true))
                     }
                 }
+                // 가사는 줄이 짧아 표지 아래 좁은 칸에, 넓은 오른쪽 칸은 듣기·다시 만들기에 쓴다(가사가 길어도 다시 만들기가 밀려나지 않게)
+                left.addView(label("가사"))
+                val views = mutableListOf<LyricLine>()
+                val lyr = f.optJSONObject("lyrics") ?: JSONObject()
+                val plan = f.getJSONObject("plan")
+                val barSec = 240f / plan.optDouble("tempo", 120.0).toFloat()
+                val sections = plan.getJSONArray("sections")
+                for (i in 0 until sections.length()) {
+                    val sec = sections.getJSONObject(i)
+                    if (!sec.getBoolean("sung")) continue
+                    val name = sec.getString("name")
+                    val lines = lyr.optJSONArray(name) ?: lyr.optJSONArray(name.trimEnd('2')) ?: continue
+                    if (lines.length() == 0) continue
+                    left.addView(text(SECTION_NAMES[name.trimEnd('2')] ?: name, BODY_S_STRONG, TEXT3).withMargin(top = 12, bottom = 4))
+                    val start = sec.getDouble("start_sec").toFloat()
+                    val lineSec = sec.optInt("bars", 2 * lines.length()) * barSec / lines.length()
+                    for (j in 0 until lines.length()) {
+                        val tv = text(lines.getString(j), BODY, TEXT3).withMargin(bottom = 4)
+                        views += LyricLine(start + j * lineSec, start + (j + 1) * lineSec, tv)
+                        left.addView(tv)
+                    }
+                }
+                if (views.isEmpty()) left.addView(text("연주곡이에요(가사 없음).", BODY, TEXT3))
+                lyricViews = views
                 addView(left, LinearLayout.LayoutParams(dp(PLAYER_COVER), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(56) })
                 val col = column()
                 col.addView(headline(f.getString("title")))
                 col.addView(text(f.getString("prompt"), BODY, TEXT2))
                 f.optString("edit_summary").takeIf { it.isNotEmpty() && it != "null" }?.let { col.addView(text("✦ 이번 버전: $it", BODY_S, POSITIVE).withMargin(top = 4)) }
-                val o = f.optJSONObject("options")
-                col.addView(text(listOfNotNull(f.getString("style"),
-                    o?.let { "멜로디 ${it.optInt("melody_weight")} · 스타일 ${it.optInt("style_weight")} · ${VOICE_NAMES[it.optString("voice")] ?: "자동"}" }).joinToString("\n"), BODY_S, TEXT3).withMargin(top = 4))
                 seek = SeekBar(this@MainActivity).apply {
                     max = 1000
                     progressTintList = ColorStateList.valueOf(POSITIVE)
@@ -1515,18 +1547,23 @@ class MainActivity : Activity() {
                 col.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(24) })
                 time = text("0:00 / ${clock(total)}", BODY_S_STRONG, TEXT3)
                 col.addView(time)
-                if (finalJob == null) col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 24))
-                if (finalJob == null) col.addView(editRow(f).withMargin(top = 16))
+                // 다시 만들기 한 곳: 말로 바꾸기 + AI 제안 단추 + 세부 설정(접힘)
+                if (finalJob == null) {
+                    col.addView(label("다시 만들기 · 마음에 안 드는 점을 말하거나 제안을 누르세요"))
+                    col.addView(editRow(f))
+                    col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 12))
+                }
                 // 다시 만들기(설정 다시 쓰기 · 다른 편곡 · 가사 고치기): 이 버전을 바탕으로 가중치·주제·가사를 바꿔 새 버전
-                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "이 노래로 다시 만들기 · 가중치·가사 바꿔서 ▾", size = Size.MEDIUM, enabled = finalJob == null) {
+                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 가중치·가사·표지 ▾", size = Size.MEDIUM, enabled = finalJob == null) {
                     showRemix = !showRemix
                     if (showRemix) { prompt = f.getString("prompt"); f.optJSONObject("options")?.let { o ->
                         finalSeconds = o.optInt("seconds", 120); voice = o.optString("voice", "auto")
                         melodyWeight = o.optInt("melody_weight", 80); styleWeight = o.optInt("style_weight", 50) } }
                     showPlayer(false)
-                }.withMargin(top = 24))
+                }.withMargin(top = 16))
                 if (showRemix && finalJob == null) {
                     val panel = column().apply { background = round(SURFACE, 24); setPadding(dp(28), dp(8), dp(28), dp(28)) }
+                    panel.addView(caption("지금: ${f.optString("style")} · 멜로디 ${f.optJSONObject("options")?.optInt("melody_weight")} · 스타일 ${f.optJSONObject("options")?.optInt("style_weight")}", TEXT3))
                     panel.addView(label("주제"))
                     panel.addView(promptRow(enabled = true))
                     panel.addView(optionsPanel())
@@ -1561,29 +1598,6 @@ class MainActivity : Activity() {
                     }.withMargin(top = 24, fill = true))
                     col.addView(panel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
                 }
-                col.addView(label("가사"))
-                val views = mutableListOf<LyricLine>()
-                val lyr = f.optJSONObject("lyrics") ?: JSONObject()
-                val plan = f.getJSONObject("plan")
-                val barSec = 240f / plan.optDouble("tempo", 120.0).toFloat()
-                val sections = plan.getJSONArray("sections")
-                for (i in 0 until sections.length()) {
-                    val sec = sections.getJSONObject(i)
-                    if (!sec.getBoolean("sung")) continue
-                    val name = sec.getString("name")
-                    val lines = lyr.optJSONArray(name) ?: lyr.optJSONArray(name.trimEnd('2')) ?: continue
-                    if (lines.length() == 0) continue
-                    col.addView(text(SECTION_NAMES[name.trimEnd('2')] ?: name, BODY_S_STRONG, TEXT3).withMargin(top = 12, bottom = 4))
-                    val start = sec.getDouble("start_sec").toFloat()
-                    val lineSec = sec.optInt("bars", 2 * lines.length()) * barSec / lines.length()
-                    for (j in 0 until lines.length()) {
-                        val tv = text(lines.getString(j), BODY, TEXT3).withMargin(bottom = 4)
-                        views += LyricLine(start + j * lineSec, start + (j + 1) * lineSec, tv)
-                        col.addView(tv)
-                    }
-                }
-                if (views.isEmpty()) col.addView(text("연주곡이에요(가사 없음).", BODY, TEXT3))
-                lyricViews = views
                 addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             })
         }, { showPlayer(false) }, tabs = true) {
@@ -1715,12 +1729,9 @@ class MainActivity : Activity() {
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         info.addView(text("$n  ${instrumentLabel(t.getString("instrument"))} · $what", BODY_STRONG, TEXT))
         val dur = t.optDouble("duration_sec", 0.0).toFloat()
-        info.addView(text(listOfNotNull(
-            clock(dur),
-            mode,
-            "음 ${t.optInt("notes")}개 · 템포 ${t.getInt("tempo")}$fit",
-            if (chords.isNotEmpty()) "반주 화음 $chords" else null,
-        ).joinToString(" · "), BODY_S, TEXT3).withMargin(top = 4))
+        // 음 개수·화음 이름 같은 기술 정보는 빼고(음표 보기 ♪ 에 있다) 길이와 쌓은 방식만
+        info.addView(text(listOfNotNull(clock(dur), mode, if (chords.isNotEmpty()) "반주 붙음" else null, fit.removePrefix(" · ").ifEmpty { null })
+            .joinToString(" · "), BODY_S, TEXT3).withMargin(top = 4))
         val bar = progressBar()
         if (dur > 0) trackBars += TrackBar(n, t.optDouble("start_sec", 0.0).toFloat(), dur, bar)
         info.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(12) })
@@ -2091,7 +2102,10 @@ class MainActivity : Activity() {
         val type = v.type()
         addView(text("내 음역대", BODY_S_STRONG, TEXT3))
         if (!v.enough) {
-            addView(text("흥얼거리면 내 음역대가 여기에 쌓여요. 녹음하는 동안 지금 내는 음이 막대 위에 점으로 보여요.", BODY_S, TEXT2).withMargin(top = 8))
+            // 아직 모르면 한 줄만(막대는 녹음 화면에서 보인다)
+            addView(text("흥얼거리면 내 음역대가 여기에 쌓여요.", BODY_S, TEXT2).withMargin(top = 4))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(20) }
+            return@apply
         } else {
             addView(text(listOfNotNull("${VoiceRange.name(v.low!!)}–${VoiceRange.name(v.high!!)}", type?.let { "${it.name} 쪽" },
                 "편한 음 ${VoiceRange.name(v.comfortLow!!)}–${VoiceRange.name(v.comfortHigh!!)}").joinToString(" · "), BODY_STRONG, TEXT).withMargin(top = 8))
