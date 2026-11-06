@@ -24,6 +24,7 @@ from aiohttp import web
 import comfy as C
 import lyrics
 import melody_ai
+import melody_mood
 import melody_notes
 
 STORAGE = Path(__file__).parent / "storage"
@@ -118,6 +119,21 @@ def _note_count(summary: str) -> int | None:
     return int(m.group(1) or m.group(2)) if m else None
 
 
+def _mood_view(mood: dict | None) -> dict | None:
+    """앱에 보낼 성격(계산 세부는 features 에만)."""
+    return None if not mood else {k: mood[k] for k in ("label", "energy", "level", "shade", "confident", "why", "features")}
+
+
+def _track_view(song: dict, t: dict, base: str) -> dict:
+    score = melody_notes.notes(t)
+    # 음표 → 성격. 계산이 가벼워서 저장하지 않고 응답 때마다 잰다(규칙을 고치면 지난 곡에도 바로 반영)
+    mood = melody_mood.analyze(score, t["tempo"], t.get("hum_info"))
+    return {**{k: v for k, v in t.items() if k not in ("file", "abc")}, "audio_url": f"{base}/tracks/{t['n']}/audio",
+            "hum_url": f"{base}/tracks/{t['n']}/hum" if any((STORAGE / song["id"]).glob(f"hum{t['n']}.*")) else None,
+            "score": score, "mood": _mood_view(mood),
+            "duration_sec": round(sf.info(STORAGE / song["id"] / t["file"]).duration, 2)}
+
+
 def song_view(song: dict) -> dict:
     base = f"/v1/songs/{song['id']}"
     out = {k: v for k, v in song.items() if k not in ("tracks", "ai", "final", "finals")}
@@ -127,11 +143,8 @@ def song_view(song: dict) -> dict:
         out["final"] = view(song["final"])
         out["finals"] = [view(f) for f in song.get("finals", [song["final"]])]
     out["audio_url"] = base + "/audio"
-    out["tracks"] = [{**{k: v for k, v in t.items() if k not in ("file", "abc")}, "audio_url": f"{base}/tracks/{t['n']}/audio",
-                      "hum_url": f"{base}/tracks/{t['n']}/hum" if any((STORAGE / song["id"]).glob(f"hum{t['n']}.*")) else None,
-                      "score": melody_notes.notes(t),
-                      "duration_sec": round(sf.info(STORAGE / song["id"] / t["file"]).duration, 2)}
-                     for t in song["tracks"]]
+    out["tracks"] = [_track_view(song, t, base) for t in song["tracks"]]
+    out["mood"] = out["tracks"][0]["mood"] if out["tracks"] else None
     if song.get("ai"):
         out["ai"] = {**song["ai"], "audio_url": base + "/ai/audio" if song["ai"].get("file") else None}
         out["ai"].pop("file", None)
@@ -489,7 +502,8 @@ def _style(tags: str, voice: str) -> str:
 
 async def start_final(request):
     """최종 노래 만들기(약 3분). 본문 JSON: {"prompt": 주제(비우면 주사위), "seconds": 60~180(기본 120),
-    "voice": auto|female|male|none(연주곡), "melody_weight": 0~100(기본 80), "style_weight": 0~100(기본 50)}.
+    "voice": auto|female|male|none(연주곡), "melody_weight": 0~100(기본 80), "style_weight": 0~100(기본 50),
+    "follow_mood": 멜로디 느낌에 스타일·가사 말투를 맞출지(기본 true)}.
     흥얼거린 트랙 1 → 2분 멜로디(곡 구성 + 화음) → 주제로 가사 → 앨범 표지 → YuE2 로 노래. 진행은 /v1/jobs/{id} 의 stage.
     다시 만들면 이전 노래는 song["finals"](버전 목록)에 남는다."""
     store: Store = request.app["store"]
@@ -499,7 +513,8 @@ async def start_final(request):
     opts = {"seconds": float(min(180, max(60, float(body.get("seconds", FINAL_SECONDS))))),
             "voice": _option(body, "voice", VOICES, "auto"),
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
-            "style_weight": int(min(100, max(0, int(body.get("style_weight", 50)))))}
+            "style_weight": int(min(100, max(0, int(body.get("style_weight", 50))))),
+            "follow_mood": body.get("follow_mood", True) is not False}
     # 다시 만들기: 이전 버전을 바탕으로 가중치·주제·가사·스타일만 바꾼다
     base = next((f for f in song.get("finals", []) if f.get("id") == body.get("from")), None)
     if body.get("from") and base is None:
@@ -517,6 +532,15 @@ async def start_final(request):
     request.app["jobs"][job_id] = job
     request.app["ai_tasks"].add(asyncio.create_task(_run_final(request.app, job, song)))
     return web.json_response({k: v for k, v in job.items() if k != "_remix"}, status=202)
+
+
+def _melody_mood(src_abc: str, first: dict) -> dict | None:
+    """노래에 실제로 쓰는 멜로디(1번 트랙 또는 AI 가 다시 쓴 8마디)의 성격. 실패해도 노래 만들기는 계속한다."""
+    try:
+        notes = melody_notes.notes({"abc": src_abc, "tempo": first["tempo"], "transpose": first.get("transpose", 0)})
+        return melody_mood.analyze(notes, first["tempo"], first.get("hum_info") if src_abc == first["abc"] else None)
+    except Exception:
+        return None
 
 
 async def _run_final(app, job: dict, song: dict):
@@ -549,14 +573,18 @@ async def _run_final(app, job: dict, song: dict):
         w = _weights(opts["melody_weight"], opts["style_weight"])
         same_form = base and base.get("options", {}).get("seconds") == opts["seconds"] and (base.get("options", {}).get("voice") == "none") == (not sung)
         reference = REFERENCE_FROM <= opts["melody_weight"] < KEEP_FROM
+        first = song["tracks"][0]
+        src = first["abc"]
         if same_form and bool(base.get("reference")) == reference:
             abc, plan = base["abc"], base["plan"]
+            src = base.get("melody_abc") or src
         else:
-            src = song["tracks"][0]["abc"]
             if reference:  # 허밍은 참고만: AI 가 다시 쓴 8마디로 2분 곡을 만든다
                 src, _ = await melody_ai.rewrite(src, seed)
             out = await cf.run(C.song_form_graph(src, opts["seconds"], sung))
             abc, plan = C.text(out, "abc_out"), json.loads(C.text(out, "plan_out"))
+        mood = _melody_mood(src, first) if opts.get("follow_mood", True) else None
+        job["mood"] = _mood_view(mood)
         job.update(stage="lyrics", eta_sec=FINAL_ETA(plan["seconds"]), seconds=plan["seconds"])
         if remix["lyrics"]:
             sections, dropped = lyrics.normalize_sections(remix["lyrics"], plan)
@@ -567,7 +595,11 @@ async def _run_final(app, job: dict, song: dict):
         elif remix["keep_lyrics"] and same_form:
             words = {"title": base["title"], "style": base["style"], "cover": base.get("scene", ""), "sections": base["lyrics"], "miss": base.get("syllable_miss")}
         else:
-            words = await lyrics.write(job["prompt"], plan, seed)
+            words = await lyrics.write(job["prompt"], plan, seed, mood)
+            # 새로 쓴 가사일 때만 스타일·표지를 멜로디 느낌에 맞춘다(가사·스타일을 지킨 다시 만들기는 그대로)
+            words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
+            if mood and words["cover"]:
+                words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
         text = lyrics.yue_lyrics(plan, words["sections"]) if sung else "[Instrumental]"
         style = _style(remix["style"] or words["style"], opts["voice"])
         # 만드는 동안 먼저 보여 줄 것(첫 결과가 준비되면 알린다) — 노래를 기다리는 3분이 덜 지루하게
@@ -596,7 +628,8 @@ async def _run_final(app, job: dict, song: dict):
                      "lyrics": words["sections"] if sung else {}, "lyrics_text": text, "syllable_miss": words["miss"], "plan": plan, "seed": seed,
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
                      "file": audio_file, "cover": cover_file, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "abc": abc,
-                     "edit": remix.get("edit"), "edit_summary": job.get("edit_summary")}
+                     "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
+                     "mood": _mood_view(mood), "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]
             fresh["final"] = final
             store.save(fresh)

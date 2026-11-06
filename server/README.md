@@ -48,9 +48,13 @@ cd server
 | `GET /v1/jobs/{job_id}/cover` | 만드는 중인 노래의 표지(나오는 대로) | 즉시 |
 | `GET /v1/songs/{id}/final/audio`·`/cover` | 완성곡 음원·표지(`?v=버전 id`) | 즉시 |
 
+### 멜로디 성격(`mood`)
+
+곡 응답의 `tracks[n].mood` 와 `mood`(1번 트랙 = 내 허밍)는 음표에서 잰 멜로디 성격이다(`melody_mood.py`). 템포·촘촘함·도약·음역·리듬 변화로 **에너지 0~100**, 장조·단조 틀로 **밝기**를 재서 6칸(포근한·쓸쓸한·산뜻한·아련한·신나는·강렬한, 밝기가 애매하면 잔잔한·부드러운·힘찬)으로 부르고 이유 2~3개(`why`)를 붙인다. 음이 6개 미만이거나 4초 미만이면 `null`. 시험: `python test_mood.py`.
+
 ### POST /v1/songs/{id}/final — 노래 만들기
 
-본문 JSON. `prompt`(주제, 비우면 주사위) · `seconds`(60~180, 기본 120) · `voice`(`auto`·`female`·`male`·`none`) · `melody_weight`(0~100, 내 멜로디 반영) · `style_weight`(0~100, 스타일 강도). 다시 만들기: `from`(바탕 버전 id) · `keep_lyrics` · `keep_cover` · `lyrics`(직접 고친 가사, 머리말은 절·후렴·브리지 등으로 정리) · **`edit`(말로 바꾸기 한 문장 — 로컬 LLM 이 설정 변경으로 해석, `edit_summary` 로 한 줄 안내)**.
+본문 JSON. `prompt`(주제, 비우면 주사위) · `seconds`(60~180, 기본 120) · `voice`(`auto`·`female`·`male`·`none`) · `melody_weight`(0~100, 내 멜로디 반영) · `style_weight`(0~100, 스타일 강도). 다시 만들기: `from`(바탕 버전 id) · `keep_lyrics` · `keep_cover` · `lyrics`(직접 고친 가사, 머리말은 절·후렴·브리지 등으로 정리) · **`edit`(말로 바꾸기 한 문장 — 로컬 LLM 이 설정 변경으로 해석, `edit_summary` 로 한 줄 안내)**. `follow_mood`(기본 true): 실제로 쓰는 멜로디의 성격으로 스타일 태그 앞쪽(장르·악기·템포·창법)과 가사 말투·표지 빛을 맞춘다. 주제에 장르를 직접 적으면 장르는 사용자 말을 따른다. 결과는 `final.mood` 에 남는다.
 
 진행은 `GET /v1/jobs/{id}` 의 `stage`(`edit` → `melody` → `lyrics` → `cover` → `music` → `done`). 가사·제목·스타일·표지(`cover_url`)는 나오는 대로 job 에 먼저 실린다. 가사는 줄마다 음 개수에 맞춰 쓰고, 어긋난 줄만 골라 최대 3번 고쳐 쓴다(`syllable_miss`).
 
