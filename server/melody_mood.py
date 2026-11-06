@@ -48,6 +48,9 @@ STYLES = {
     "힘찬": ("pop rock, punchy drums, electric guitar", "strong vocal", "bold bright light"),
 }
 TEMPO_TAG = ((90, "slow tempo"), (125, "mid tempo"), (999, "fast tempo"))
+# 앱에 보여 줄 장르 이름(STYLES 의 장르·악기를 한국어로)
+GENRE_KO = {"포근한": "어쿠스틱 발라드", "쓸쓸한": "피아노 발라드", "잔잔한": "잔잔한 발라드", "산뜻한": "어쿠스틱 팝",
+            "아련한": "몽환적인 인디 팝", "부드러운": "소프트 팝", "신나는": "업비트 댄스 팝", "강렬한": "록", "힘찬": "팝 록"}
 
 # 주제에 장르를 직접 적었으면 그 말을 따른다(일부러 대비를 원했을 수 있다) — 장르 태그를 앞에 넣지 않는다
 GENRE_WORDS = ("록", "락", "발라드", "힙합", "랩", "재즈", "어쿠스틱", "팝", "댄스", "트로트", "알앤비", "R&B", "EDM", "일렉", "시티팝",
@@ -58,6 +61,19 @@ GENRE_WORDS = ("록", "락", "발라드", "힙합", "랩", "재즈", "어쿠스�
 _MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 _MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 _PC = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+_PC_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+_PC_FLAT = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"]
+_NOTE = {"C": 0, "B#": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "Fb": 4, "F": 5, "E#": 5, "F#": 6, "Gb": 6,
+         "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11, "Cb": 11}
+
+
+def _major_tonic(key: str | None) -> int | None:
+    """악보 조 표기(K: 의 값, 예: "C#", "Am", "Bbmin") → 그 조표의 장조 으뜸음(0~11). 모르면 None."""
+    m = re.match(r"^([A-G][#b]?)(m|min|minor)?$", (key or "").strip())
+    if not m or m.group(1) not in _NOTE:
+        return None
+    pc = _NOTE[m.group(1)]
+    return (pc + 3) % 12 if m.group(2) else pc
 
 
 def _corr(a: list, b: list) -> float:
@@ -67,12 +83,21 @@ def _corr(a: list, b: list) -> float:
     return num / den if den else 0.0
 
 
-def _key(notes: list) -> tuple[float, str]:
-    """음 길이로 가중한 음 분포를 24개 조(12 으뜸음 × 장·단조)에 맞춰 본다. 반환: (장조 최고 - 단조 최고, 가장 맞는 조 이름)."""
+def _key(notes: list, key: str | None = None, transpose: int = 0) -> tuple[float, str]:
+    """반환: (장조 상관 - 단조 상관, 조 이름). 음 분포는 음 길이로 가중한다.
+    악보 조 표기(key)가 있으면 그 조표 안에서 장조 으뜸음과 나란한조 단조 으뜸음만 비교한다 — 앱이 보여 주는 조와
+    성격의 장·단조가 어긋나지 않게(2026-11-06 "C#장조인데 단조라 어두워요"). 없으면 24개 조를 다 본다."""
     pc = [0.0] * 12
     for n in notes:
         pc[n["midi"] % 12] += n["dur"]
     rot = lambda p, k: p[-k:] + p[:-k] if k else p
+    major_tonic = _major_tonic(key)
+    if major_tonic is not None:
+        t = (major_tonic + transpose) % 12
+        r = (t + 9) % 12
+        names = _PC_FLAT if "b" in (key or "")[1:2] else _PC_SHARP
+        maj, mnr = _corr(pc, rot(_MAJOR, t)), _corr(pc, rot(_MINOR, r))
+        return maj - mnr, (f"{names[t]}장조" if maj >= mnr else f"{names[r]}단조")
     major = max((_corr(pc, rot(_MAJOR, k)), k) for k in range(12))
     minor = max((_corr(pc, rot(_MINOR, k)), k) for k in range(12))
     name = f"{_PC[major[1]]}장조" if major[0] >= minor[0] else f"{_PC[minor[1]]}단조"
@@ -84,19 +109,19 @@ def _unit(name: str, x: float) -> float:
     return max(0.0, min(1.0, (x - lo) / (hi - lo)))
 
 
-def features(notes: list, tempo: float) -> dict:
+def features(notes: list, tempo: float, key: str | None = None, transpose: int = 0) -> dict:
     ns = sorted(notes, key=lambda n: n["start"])
     span = max(1e-6, ns[-1]["start"] + ns[-1]["dur"] - ns[0]["start"])
     beat = 60.0 / max(1.0, tempo)
     iv = [abs(b["midi"] - a["midi"]) for a, b in zip(ns, ns[1:])]
     durs = [n["dur"] / beat for n in ns]
     midis = [n["midi"] for n in ns]
-    bright, key = _key(ns)
+    bright, key_name = _key(ns, key, transpose)
     return {
         "tempo": round(tempo), "density": round(len(ns) / span, 2), "leap": round(st.mean(iv), 2) if iv else 0.0,
         "big_leaps": round(sum(1 for x in iv if x >= 5) / max(1, len(iv)), 2), "range": max(midis) - min(midis),
         "rhythm": round(st.pstdev(durs) / st.mean(durs), 2) if st.mean(durs) else 0.0,
-        "pitch_mean": round(st.mean(midis), 1), "bright": round(bright, 3), "key": key,
+        "pitch_mean": round(st.mean(midis), 1), "bright": round(bright, 3), "key": key_name,
         "notes": len(ns), "seconds": round(span, 1),
     }
 
@@ -116,11 +141,11 @@ def _loud_db(hum_info: str | None) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def analyze(notes: list, tempo: float, hum_info: str | None = None) -> dict | None:
-    """음 목록([{"start","dur","midi"}], 초) + 템포 → 성격. 음이 너무 적거나 짧으면 None."""
+def analyze(notes: list, tempo: float, hum_info: str | None = None, key: str | None = None, transpose: int = 0) -> dict | None:
+    """음 목록([{"start","dur","midi"}], 초) + 템포(+ 악보 조 표기·조 옮김) → 성격. 음이 너무 적거나 짧으면 None."""
     if len(notes) < MIN_NOTES:
         return None
-    f = features(notes, tempo)
+    f = features(notes, tempo, key, transpose)
     if f["seconds"] < MIN_SEC:
         return None
     units = {k: _unit(k, f[k]) for k in SCALE}
@@ -139,7 +164,7 @@ def analyze(notes: list, tempo: float, hum_info: str | None = None) -> dict | No
     # 확신: 음이 적거나 에너지가 칸 경계 가까이면 낮다
     edge = min(abs(energy - top) for top, _ in LEVELS[:-1])
     confident = f["notes"] >= 10 and edge >= 4
-    return {"energy": energy, "level": level, "shade": shade, "label": label, "confident": confident,
+    return {"energy": energy, "level": level, "shade": shade, "label": label, "genre": GENRE_KO[label], "confident": confident,
             "why": why, "features": f, "units": {k: round(v, 2) for k, v in units.items()}}
 
 

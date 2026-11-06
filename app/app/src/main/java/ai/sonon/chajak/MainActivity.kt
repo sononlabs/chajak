@@ -343,7 +343,7 @@ class MainActivity : Activity() {
                     setOnClickListener { openSong(id, player = true) }
                     addView(thumb(item), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(MUSIC_COVER)))
                     addView(text(item.getString("title"), BODY_STRONG, TEXT).apply { maxLines = 1 }.withMargin(top = 12))
-                    addView(text("${clock(item.optDouble("final_sec", 0.0).toFloat())} · ${keyName(item.optString("key"))} · ${dateOf(item)}", BODY_S, TEXT3))
+                    addView(text("${clock(item.optDouble("final_sec", 0.0).toFloat())} · ${keyOf(item)} · ${dateOf(item)}", BODY_S, TEXT3))
                 }
             }, 4).withMargin(fill = true))
             }
@@ -368,9 +368,10 @@ class MainActivity : Activity() {
                     addView(thumb(item), LinearLayout.LayoutParams(dp(96), dp(96)).apply { marginEnd = dp(24) })
                     addView(column().apply {
                         addView(text(songName(item), BODY_STRONG, TEXT).apply { maxLines = 1 })
+                        item.optJSONObject("mood")?.let { m -> addView(moodLine(m.optString("label"), "${m.optString("label")} · 에너지 ${m.optInt("energy")}").withMargin(top = 4)) }
                         addView(text(listOfNotNull(
                             "트랙 ${item.optInt("tracks")}개", clock(item.optDouble("duration_sec", 0.0).toFloat()),
-                            "템포 ${item.optInt("tempo")}", keyName(item.optString("key")), dateOf(item),
+                            "템포 ${item.optInt("tempo")}", keyOf(item), dateOf(item),
                             if (item.isNull("title")) null else "노래 있음",
                         ).joinToString(" · "), BODY_S, TEXT3).withMargin(top = 4))
                     }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -378,6 +379,32 @@ class MainActivity : Activity() {
                 }.withMargin(top = 16, fill = true))
             }
         }, ::showMelodyList, tabs = true)
+    }
+
+    /** 멜로디 성격 칩: "♪ 쓸쓸한 멜로디 ●●○○○ 에너지 28" + 아래에 이유 한 줄. 읽기만(주행 중에도 조작 없음). */
+    private fun moodRow(mood: JSONObject?): View? {
+        if (mood == null) return null
+        val c = Mood.color(mood.optString("label"))
+        return column().apply {
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = round((c and 0x00FFFFFF) or 0x2E000000, 999)
+                setPadding(dp(20), dp(8), dp(24), dp(8))
+                addView(text("♪ " + Mood.name(mood), BODY_S_STRONG, TEXT))
+                addView(text("   " + Mood.dots(mood.optInt("energy")), BODY_S, c))
+                addView(text("  에너지 ${mood.optInt("energy")}", BODY_S, TEXT2))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            Mood.why(mood).takeIf { it.isNotEmpty() }?.let { addView(caption(it, TEXT3)) }
+        }.withMargin(top = 12)
+    }
+
+    /** 성격 색 점 + 한 줄(목록·노래 만들기·완성 화면). */
+    private fun moodLine(label: String?, line: String, color: Int = TEXT3) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(text("● ", BODY_S, Mood.color(label)))
+        addView(text(line, BODY_S, color))
     }
 
     private fun dateOf(item: JSONObject) = item.optString("created").let { c ->
@@ -789,7 +816,9 @@ class MainActivity : Activity() {
             val left = column()
             left.addView(headline(s?.let { songName(it, "내 멜로디") } ?: "새 멜로디"))
             left.addView(body(if (s == null) "흥얼거림을 음표로 바꾸고 있어요"
-                              else "템포 ${s.optInt("tempo")} · ${keyName(s.optString("key"))} · 트랙 ${count}개"))
+                              else "템포 ${s.optInt("tempo")} · ${keyOf(s)} · 트랙 ${count}개"))
+            // 음표에서 잰 멜로디 성격 — 노래 만들기가 이 느낌에 맞춰 스타일·가사 말투를 고른다
+            moodRow(s?.optJSONObject("mood"))?.let { left.addView(it) }
             trackBars.clear()
             songBar = null
             if (s != null) {
@@ -916,7 +945,7 @@ class MainActivity : Activity() {
         show({
             addView(steps(2, busy = making))
             addView(headline("노래 만들기"))
-            addView(body("${songName(s, "내 멜로디")} · 템포 ${s.optInt("tempo")} · ${keyName(s.optString("key"))} → 2분 노래(가사·앨범 표지)"))
+            addView(body("${songName(s, "내 멜로디")} · 템포 ${s.optInt("tempo")} · ${keyOf(s)} → 2분 노래(가사·앨범 표지)"))
             if (job != null || finalSubmitting) {
                 // 만드는 동안엔 설정 칸을 감추고 진행만 크게(다른 화면을 봐도·주행을 시작해도 계속)
                 addView(label("만드는 중 · 주제: $prompt"))
@@ -926,6 +955,11 @@ class MainActivity : Activity() {
             addView(label("주제"))
             addView(promptRow(enabled = !making))
             addView(caption(if (themeFromDrive) "오늘 드라이브로 채웠어요. 🎲 로 바꾸거나 🎤 로 말해도 돼요." else "비워 두면 🎲 처럼 아무 주제나 골라요.", TEXT3))
+            s.optJSONObject("mood")?.let { m ->
+                addView(moodLine(m.optString("label"),
+                    if (followMood) "${Mood.name(m)}에 맞춰 ${m.optString("genre")} 쪽으로 만들어요. 주제에 장르를 적으면 그 장르를 따라요."
+                    else "멜로디 느낌은 따르지 않고 주제만 보고 만들어요(세부 설정).", TEXT2).withMargin(top = 12))
+            }
             val type = voiceRange.type()
             addView(label("목소리" + (type?.let { " · 자동이면 내 음역(${it.name} 쪽)에 맞춰 ${if (it.male) "남성" else "여성"}" } ?: "")))
             val voices = VOICE_NAMES.keys.toList()
@@ -940,6 +974,11 @@ class MainActivity : Activity() {
                 setPadding(dp(28), dp(8), dp(28), dp(24))
                 addView(weightSlider("내 멜로디 반영", "70 이상: 내 허밍 그대로 · 33~69: 허밍은 참고만, AI가 더 좋은 멜로디로 · 33 미만: AI가 자유롭게", melodyWeight) { melodyWeight = it; saveDraft() })
                 addView(weightSlider("스타일 강도", "높을수록 주제의 장르·분위기를 진하게", styleWeight) { styleWeight = it; saveDraft() })
+                addView(label("멜로디 느낌"))
+                addView(segmented(listOf("멜로디 느낌 따르기", "주제만 보기"), if (followMood) 0 else 1, width = OPTION_W) {
+                    followMood = it == 0; saveDraft(); refresh()
+                })
+                addView(caption("따르면 음표에서 잰 느낌(빠르기·도약·장단조)으로 장르·악기·템포·창법과 가사 말투를 고르고, 주제는 가사의 장면으로 써요.", TEXT3))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
             addView(caption("한 소절을 전주·절·후렴·브리지로 늘리고, 주제로 가사·제목을 쓰고, 앨범 표지를 그려 노래로 만들어요. 약 3분 — 주행을 시작해도 계속 만들어요.", TEXT3).withMargin(top = 16))
         }, ::showCreate, tabs = true) {
@@ -1118,6 +1157,8 @@ class MainActivity : Activity() {
     private var voice = "auto"
     private var melodyWeight = 80
     private var styleWeight = 50
+    /** 노래 만들기가 멜로디 성격(음표 분석)을 따를지. 끄면 예전처럼 주제만 본다. */
+    private var followMood = true
 
     private fun optionSummary() =
         "${finalSeconds / 60}분 · ${VOICE_NAMES.getValue(voice)} · 멜로디 $melodyWeight · 스타일 $styleWeight"
@@ -1164,7 +1205,7 @@ class MainActivity : Activity() {
         // 목소리 '자동'이면 내 음역대 쪽(남성/여성)으로 — 따라 부르기 편한 노래가 되게
         val sung = if (voice == "auto") voiceRange.type()?.let { if (it.male) "male" else "female" } ?: "auto" else voice
         val options = JSONObject().put("seconds", finalSeconds).put("voice", sung)
-            .put("melody_weight", melodyWeight).put("style_weight", styleWeight)
+            .put("melody_weight", melodyWeight).put("style_weight", styleWeight).put("follow_mood", followMood)
         if (from != null) options.put("from", from).put("keep_lyrics", keepLyrics).put("keep_cover", keepCover)
         if (lyrics != null) options.put("lyrics", lyrics)
         if (!edit.isNullOrBlank()) options.put("edit", edit)
@@ -1530,6 +1571,10 @@ class MainActivity : Activity() {
                 val col = column()
                 col.addView(headline(f.getString("title")))
                 col.addView(text(f.getString("prompt"), BODY, TEXT2))
+                f.optJSONObject("mood")?.let { m ->
+                    col.addView(moodLine(m.optString("label"), "${Mood.name(m)}에 맞춘 " +
+                        if (m.optBoolean("genre_applied", true)) m.optString("genre") else "분위기").withMargin(top = 4))
+                }
                 f.optString("edit_summary").takeIf { it.isNotEmpty() && it != "null" }?.let { col.addView(text("✦ 이번 버전: $it", BODY_S, POSITIVE).withMargin(top = 4)) }
                 seek = SeekBar(this@MainActivity).apply {
                     max = 1000
@@ -1957,7 +2002,8 @@ class MainActivity : Activity() {
         prefs.edit().putString("draft_prompt", prompt).putInt("draft_seconds", finalSeconds)
             .putString("draft_voice", voice).putInt("draft_melody", melodyWeight)
             .putInt("draft_style", styleWeight).putInt("draft_instrument", instrument)
-            .putString("draft_melody_mode", melody).putBoolean("draft_accompaniment", accompaniment).apply()
+            .putString("draft_melody_mode", melody).putBoolean("draft_accompaniment", accompaniment)
+            .putBoolean("draft_follow_mood", followMood).apply()
     }
 
     private fun restoreDraft() {
@@ -1966,6 +2012,7 @@ class MainActivity : Activity() {
         voice = (prefs.getString("draft_voice", "auto") ?: "auto").takeIf { it in VOICE_NAMES } ?: "auto"
         melodyWeight = prefs.getInt("draft_melody", 80).coerceIn(0, 100)
         styleWeight = prefs.getInt("draft_style", 50).coerceIn(0, 100)
+        followMood = prefs.getBoolean("draft_follow_mood", true)
         instrument = prefs.getInt("draft_instrument", 0).coerceIn(0, INSTRUMENTS.lastIndex)
         melody = prefs.getString("draft_melody_mode", "그대로")?.takeIf { it in listOf("그대로", "다듬기") } ?: "그대로"
         accompaniment = prefs.getBoolean("draft_accompaniment", true)
@@ -2726,6 +2773,11 @@ class MainActivity : Activity() {
     }
 
     private fun keyName(k: String) = if (k.endsWith("m")) "${k.dropLast(1)}단조" else "${k}장조"
+
+    /** 곡·목록 항목의 조 이름. 성격 분석이 조표 안에서 장조/나란한조 단조를 골랐으면 그것(성격의 밝음·어두움과 맞게). */
+    private fun keyOf(item: JSONObject): String = item.optJSONObject("mood")?.let { m ->
+        m.optJSONObject("features")?.optString("key")?.takeIf { it.isNotEmpty() } ?: m.optString("key").takeIf { it.isNotEmpty() }
+    } ?: keyName(item.optString("key"))
 
     data class Variation(val id: String, val name: String, val description: String)
 

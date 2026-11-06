@@ -59,6 +59,12 @@ def synthetic() -> None:
     rock = M.analyze(mk(*CASES["강렬한(빠른 단조 도약)"][1:]), 168)
     check("에너지 순서(자장가 < 록)", lull["energy"] + 50 < rock["energy"], f"{lull['energy']} < {rock['energy']}")
     check("너무 짧으면 분석 안 함", M.analyze(mk(100, [1, 1, 1], [60, 62, 64], repeat=1), 100) is None)
+    # 악보 조표(C# 장조 = A# 단조 조표) 안에서 A# 중심 멜로디는 A#단조로 — 앱의 조 표시와 장·단조가 어긋나지 않게
+    asharp = [p + 1 for p in CASES["쓸쓸한(느린 단조)"][3]]  # 라 단조 예시를 반음 올림 = A# 단조
+    m = M.analyze(mk(70, CASES["쓸쓸한(느린 단조)"][2], asharp), 70, key="C#")
+    check("조표 안에서 나란한조 단조", m["features"]["key"] == "A#단조" and m["shade"] == "어두움", m["features"]["key"])
+    m = M.analyze(mk(*CASES["포근한(자장가)"][1:]), 68, key="Am")
+    check("단조 표기(Am) 조표에서 장조 중심이면 C장조", m["features"]["key"] == "C장조", m["features"]["key"])
     check("같은 멜로디면 같은 결과", M.analyze(mk(*CASES["산뜻한(경쾌한 장조)"][1:]), 116) == M.analyze(mk(*CASES["산뜻한(경쾌한 장조)"][1:]), 116))
 
 
@@ -82,7 +88,7 @@ def storage() -> None:
         t = (song.get("tracks") or [None])[0]
         if not t or t.get("variation"):
             continue
-        m = M.analyze(melody_notes.notes(t), t["tempo"], t.get("hum_info"))
+        m = M.analyze(melody_notes.notes(t), t["tempo"], t.get("hum_info"), t.get("key"), t.get("transpose", 0))
         if m:
             rows.append((m["energy"], m["label"], m["features"]["key"], m["confident"], p.parent.name))
     if not rows:

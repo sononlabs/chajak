@@ -24,12 +24,14 @@ object Suggest {
         val out = mutableListOf<Suggestion>()
         if (midis.isNotEmpty()) {
             val span = midis.max() - midis.min()
-            val key = song.optString("key")
-            val tonic = PCS[key.removeSuffix("m")]
+            // 으뜸음: 성격 분석이 고른 조(예: "A#단조") → 없으면 악보 조 표기
+            val key = song.optJSONObject("mood")?.optJSONObject("features")?.optString("key")?.takeIf { it.isNotEmpty() }
+                ?.removeSuffix("장조")?.removeSuffix("단조") ?: song.optString("key").removeSuffix("m")
+            val tonic = PCS[key]
             if (midis.size < 10 && "finish" !in done)
                 out += Suggestion("음이 ${midis.size}개뿐이에요. 2분으로 늘리면 같은 음이 많이 반복돼요.", "멜로디 완성하기", "finish")
             if (tonic != null && midis.last() % 12 != tonic && "finish" !in done && out.none { it.action == "finish" })
-                out += Suggestion("끝음이 으뜸음(${key.removeSuffix("m")})이 아니라 끝이 열려 있어요. 닫아 주면 노래의 끝맺음이 자연스러워요.", "멜로디 완성하기", "finish")
+                out += Suggestion("끝음이 으뜸음(${key})이 아니라 끝이 열려 있어요. 닫아 주면 노래의 끝맺음이 자연스러워요.", "멜로디 완성하기", "finish")
             if (span < 5 && "rewrite" !in done)
                 out += Suggestion("음폭이 ${span}반음으로 좁아요. 후렴이 밋밋할 수 있어요.", "AI로 살리기", "rewrite")
         }

@@ -121,13 +121,13 @@ def _note_count(summary: str) -> int | None:
 
 def _mood_view(mood: dict | None) -> dict | None:
     """앱에 보낼 성격(계산 세부는 features 에만)."""
-    return None if not mood else {k: mood[k] for k in ("label", "energy", "level", "shade", "confident", "why", "features")}
+    return None if not mood else {k: mood[k] for k in ("label", "genre", "energy", "level", "shade", "confident", "why", "features")}
 
 
 def _track_view(song: dict, t: dict, base: str) -> dict:
     score = melody_notes.notes(t)
     # 음표 → 성격. 계산이 가벼워서 저장하지 않고 응답 때마다 잰다(규칙을 고치면 지난 곡에도 바로 반영)
-    mood = melody_mood.analyze(score, t["tempo"], t.get("hum_info"))
+    mood = melody_mood.analyze(score, t["tempo"], t.get("hum_info"), t.get("key"), t.get("transpose", 0))
     return {**{k: v for k, v in t.items() if k not in ("file", "abc")}, "audio_url": f"{base}/tracks/{t['n']}/audio",
             "hum_url": f"{base}/tracks/{t['n']}/hum" if any((STORAGE / song["id"]).glob(f"hum{t['n']}.*")) else None,
             "score": score, "mood": _mood_view(mood),
@@ -379,7 +379,12 @@ async def list_songs(request):
     for d in dirs[:limit]:
         s = json.loads((d / "song.json").read_text(encoding="utf-8"))
         v = song_view(s) if s.get("final") else None
-        out.append({"id": s["id"], "created": s.get("created"), "tempo": s.get("tempo"), "key": s.get("key"),
+        first = (s.get("tracks") or [None])[0]
+        try:
+            m = first and melody_mood.analyze(melody_notes.notes(first), first["tempo"], None, first.get("key"), first.get("transpose", 0))
+        except Exception:
+            m = None
+        out.append({"mood": {"label": m["label"], "energy": m["energy"], "key": m["features"]["key"]} if m else None, "id": s["id"], "created": s.get("created"), "tempo": s.get("tempo"), "key": s.get("key"),
                     "tracks": len(s.get("tracks", [])), "duration_sec": s.get("duration_sec"),
                     "title": s["final"]["title"] if v else None, "cover_url": v["final"]["cover_url"] if v else None,
                     "final_sec": s["final"].get("duration_sec") if v else None})
@@ -538,7 +543,8 @@ def _melody_mood(src_abc: str, first: dict) -> dict | None:
     """노래에 실제로 쓰는 멜로디(1번 트랙 또는 AI 가 다시 쓴 8마디)의 성격. 실패해도 노래 만들기는 계속한다."""
     try:
         notes = melody_notes.notes({"abc": src_abc, "tempo": first["tempo"], "transpose": first.get("transpose", 0)})
-        return melody_mood.analyze(notes, first["tempo"], first.get("hum_info") if src_abc == first["abc"] else None)
+        return melody_mood.analyze(notes, first["tempo"], first.get("hum_info") if src_abc == first["abc"] else None,
+                                   C.abc_header(src_abc)[1], first.get("transpose", 0))
     except Exception:
         return None
 
@@ -629,7 +635,8 @@ async def _run_final(app, job: dict, song: dict):
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
                      "file": audio_file, "cover": cover_file, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "abc": abc,
                      "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
-                     "mood": _mood_view(mood), "melody_abc": src}
+                     "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
+                     "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]
             fresh["final"] = final
             store.save(fresh)
