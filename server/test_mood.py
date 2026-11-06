@@ -65,6 +65,13 @@ def synthetic() -> None:
     check("조표 안에서 나란한조 단조", m["features"]["key"] == "A#단조" and m["shade"] == "어두움", m["features"]["key"])
     m = M.analyze(mk(*CASES["포근한(자장가)"][1:]), 68, key="Am")
     check("단조 표기(Am) 조표에서 장조 중심이면 C장조", m["features"]["key"] == "C장조", m["features"]["key"])
+    # 음악에서 딴 멜로디는 칸 경계가 다르다(무료 음원 20곡으로 맞춤): 같은 음표라도 음악이면 한 칸 위
+    pop = mk(*CASES["산뜻한(경쾌한 장조)"][1:])
+    hum, music = M.analyze(pop, 116), M.analyze(pop, 116, source="music")
+    check("음악 입력 칸 경계", hum["energy"] == music["energy"] and (hum["level"], music["level"]) == ("중간", "중간"),
+          f"에너지 {hum['energy']}: 허밍 {hum['level']} · 음악 {music['level']}")
+    rock = M.analyze(mk(130, [0.5] * 8 + [1] * 4, [64, 67, 69, 71, 69, 67, 64, 62, 64, 67, 64, 59]), 130, source="music")
+    check("음악 입력: 에너지 50 넘으면 격정", rock["energy"] < 50 or rock["level"] == "격정", f"에너지 {rock['energy']} → {rock['level']}")
     check("같은 멜로디면 같은 결과", M.analyze(mk(*CASES["산뜻한(경쾌한 장조)"][1:]), 116) == M.analyze(mk(*CASES["산뜻한(경쾌한 장조)"][1:]), 116))
 
 
@@ -88,7 +95,7 @@ def storage() -> None:
         t = (song.get("tracks") or [None])[0]
         if not t or t.get("variation"):
             continue
-        m = M.analyze(melody_notes.notes(t), t["tempo"], t.get("hum_info"), t.get("key"), t.get("transpose", 0))
+        m = M.analyze(melody_notes.notes(t), t["tempo"], t.get("hum_info"), t.get("key"), t.get("transpose", 0), t.get("input", "hum"))
         if m:
             rows.append((m["energy"], m["label"], m["features"]["key"], m["confident"], p.parent.name))
     if not rows:

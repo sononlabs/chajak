@@ -27,6 +27,10 @@ SCALE = {
     "rhythm": (0.0, 1.0, 0.10),      # 음 길이 표준편차 / 평균(들쭉날쭉)
 }
 LEVELS = ((35, "잔잔"), (65, "중간"), (101, "격정"))
+# 음악에서 딴 멜로디(input=music): 반주 속에서 뽑혀 에너지가 허밍보다 좁게 몰린다(무료 음원 20곡: 잔잔 평균 25 · 중간 42 · 격정 53).
+# 허밍 경계 그대로면 격정 7곡 중 1곡만 맞아 60%(12/20) → 이 경계로 80%(16/20). 34~38 / 50~52 어디서도 16곡이라 반올림 값.
+# 원음 소리 특성(밝기·고음 비율·타악기 비율)도 섞어 봤지만 어떤 비율로도 늘지 않았다 — 믹싱 습관을 따라가서(밝게 믹스한 발라드가 격정으로).
+LEVELS_MUSIC = ((36, "잔잔"), (50, "중간"), (101, "격정"))
 BRIGHT_MIN = 0.05  # 장조·단조 상관값 차이가 이보다 작으면 "애매"
 
 NAMES = {
@@ -141,8 +145,10 @@ def _loud_db(hum_info: str | None) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def analyze(notes: list, tempo: float, hum_info: str | None = None, key: str | None = None, transpose: int = 0) -> dict | None:
-    """음 목록([{"start","dur","midi"}], 초) + 템포(+ 악보 조 표기·조 옮김) → 성격. 음이 너무 적거나 짧으면 None."""
+def analyze(notes: list, tempo: float, hum_info: str | None = None, key: str | None = None, transpose: int = 0,
+            source: str = "hum") -> dict | None:
+    """음 목록([{"start","dur","midi"}], 초) + 템포(+ 악보 조 표기·조 옮김·입력 종류) → 성격. 음이 너무 적거나 짧으면 None.
+    source: "hum"(흥얼거림) 또는 "music"(듣던 음악에서 딴 것) — 에너지 칸 경계가 다르다."""
     if len(notes) < MIN_NOTES:
         return None
     f = features(notes, tempo, key, transpose)
@@ -150,7 +156,8 @@ def analyze(notes: list, tempo: float, hum_info: str | None = None, key: str | N
         return None
     units = {k: _unit(k, f[k]) for k in SCALE}
     energy = round(100 * sum(units[k] * SCALE[k][2] for k in SCALE))
-    level = next(name for top, name in LEVELS if energy < top)
+    levels = LEVELS_MUSIC if source == "music" else LEVELS
+    level = next(name for top, name in levels if energy < top)
     shade = "애매" if abs(f["bright"]) < BRIGHT_MIN else ("밝음" if f["bright"] > 0 else "어두움")
     label = NAMES[(level, shade)]
     # 이유: 두드러진(0.5 에서 0.2 넘게 먼) 특성 중 두 개 + 밝기. 다 중간이면 "중간 빠르기"
@@ -162,9 +169,9 @@ def analyze(notes: list, tempo: float, hum_info: str | None = None, key: str | N
     if loud is not None:
         f["loud_db"] = loud  # 아직 에너지에 넣지 않음 — 마이크·차마다 기준이 달라 사용자별 보정 뒤에 쓴다
     # 확신: 음이 적거나 에너지가 칸 경계 가까이면 낮다
-    edge = min(abs(energy - top) for top, _ in LEVELS[:-1])
+    edge = min(abs(energy - top) for top, _ in levels[:-1])
     confident = f["notes"] >= 10 and edge >= 4
-    return {"energy": energy, "level": level, "shade": shade, "label": label, "genre": GENRE_KO[label], "confident": confident,
+    return {"energy": energy, "level": level, "shade": shade, "label": label, "genre": GENRE_KO[label], "confident": confident, "source": source,
             "why": why, "features": f, "units": {k: round(v, 2) for k, v in units.items()}}
 
 
