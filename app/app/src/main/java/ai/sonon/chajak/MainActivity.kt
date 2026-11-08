@@ -1097,7 +1097,8 @@ class MainActivity : Activity() {
      * 말로 주제 넣기: Pleos 기기 음성 인식(RecognitionService, 에뮬레이터는 ai.umos.ambientai)으로 받아 적는다.
      * 듣는 동안 차 음악은 오디오 포커스로 잠깐 멈추고, 한 번 더 누르면 그만. 말한 내용은 기기 인식 서비스로만 간다.
      */
-    private fun voicePrompt(input: EditText, onText: (String) -> Unit = { prompt = it }) {
+    /** onFinal: 말이 끝나 최종 인식 결과가 나왔을 때(중간 결과 말고) 한 번 — 말로 바꾸기의 주행 중 자동 실행에 쓴다. */
+    private fun voicePrompt(input: EditText, onText: (String) -> Unit = { prompt = it }, onFinal: ((String) -> Unit)? = null) {
         if (listening) { recognizer?.stopListening(); return }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
             return requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_VOICE)
@@ -1112,6 +1113,7 @@ class MainActivity : Activity() {
             recognizer?.destroy(); recognizer = null
             if (!text.isNullOrBlank()) onText(text)
             refresh()
+            if (!text.isNullOrBlank()) onFinal?.invoke(text)
         }
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
@@ -1438,7 +1440,8 @@ class MainActivity : Activity() {
     private fun editRow(f: JSONObject) = column().apply {
         background = round(SURFACE, 24)
         setPadding(dp(28), dp(16), dp(28), dp(20))
-        addView(text("말로 바꾸기 · 예: 더 신나게, 멜로디는 살려줘", BODY_S_STRONG, TEXT3))
+        addView(text(if (driving) "말로 바꾸기 · 🎤 누르고 말하면 바로 새 버전 · 예: 드럼 빼고 피아노만"
+                     else "말로 바꾸기 · 예: 더 신나게, 멜로디는 살려줘", BODY_S_STRONG, TEXT3))
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1458,15 +1461,19 @@ class MainActivity : Activity() {
                 })
             }
             addView(input, LinearLayout.LayoutParams(0, dp(88), 1f).apply { marginEnd = dp(12) })
-            addView(iconButton(if (listening) "■" else "🎤") { voicePrompt(input) { editText = it } }.apply { contentDescription = "말로 바꾸기 — 말하기" },
-                LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(12) })
-            addView(button("새 버전", Btn.SECONDARY, Size.MEDIUM, enabled = !finalSubmitting) {
-                val req = editText.trim()
-                if (req.isEmpty()) return@button
+            fun submit(req: String) {
+                if (req.isBlank() || finalSubmitting || finalJob != null) return
                 editText = ""
                 prompt = f.optString("prompt", prompt)
-                createFinal(from = f.optString("id").ifEmpty { null }, keepLyrics = true, keepCover = true, edit = req)
-            })
+                createFinal(from = f.optString("id").ifEmpty { null }, keepLyrics = true, keepCover = true, edit = req.trim())
+            }
+            // 주행 중에는 🎤 한 번 누르고 말하면 끝 — 말이 끝나면 버튼 없이 바로 새 버전(손·눈을 쓰는 단계를 하나 줄인다).
+            // 정차 중에는 받아 적은 문장을 보고 고친 뒤 "새 버전"을 누른다
+            addView(iconButton(if (listening) "■" else "🎤") {
+                voicePrompt(input, { editText = it }, onFinal = { if (driving) submit(it) })
+            }.apply { contentDescription = "말로 바꾸기 — 말하기" },
+                LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(12) })
+            addView(button("새 버전", Btn.SECONDARY, Size.MEDIUM, enabled = !finalSubmitting) { submit(editText) })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
     }
 

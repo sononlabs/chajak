@@ -221,7 +221,9 @@ def _edit_prompt(request: str, current: dict) -> str:
         "요청에 없는 것은 null 로 둬(지금 값을 다시 적지 마). 요청에 없는 분위기 태그도 더하지 마. '멜로디는 살려'면 melody_weight 를 80 이상으로.\n"
         "'내 멜로디가 잘 안 들려'·'내가 부른 거랑 달라'처럼 멜로디가 약하다는 말이면 melody_weight 를 지금보다 15 이상 올려(최대 100).\n"
         "분위기 말(잔잔하게·신나게·어둡게·몽환적으로 등)은 영어 분위기·템포 태그(calm, mellow, upbeat, energetic, dark, dreamy 등)로 style_add 에 넣어. "
-        "악기를 빼라면 그 악기 영어 이름을 style_remove 에."
+        "악기를 빼라면 그 악기 영어 이름을 style_remove 에. "
+        "'피아노만 남겨'·'기타 하나로'처럼 악기를 줄이라면 style_add 에 그 악기 중심 태그('solo piano, minimal arrangement')를, "
+        "style_remove 에 나머지 악기(drums, bass, electric guitar, synth 등)를 넣어."
     )
 
 
@@ -269,10 +271,22 @@ def _summary(out: dict, voice, seconds, theme) -> str:
     return (" ".join(bits) + " 새 버전을 만들었어요.") if bits else "말씀하신 대로 바꿔 새 버전을 만들었어요."
 
 
+# 목소리 성별 태그는 편곡 수정으로 빼지 않는다 — "male vocal" 이 "female vocal"·"vocal" 빼기에 같이 걸려 목소리가 바뀌었다
+VOICE_TAGS = ("male vocal", "female vocal")
+# 드럼을 빼라는데 이런 분위기 태그가 남으면 엔진이 다시 드럼을 깐다(측정: 태그만 빼면 타악기 비율이 오히려 올랐다)
+DRUM_HINTS = ("driving", "energetic", "intense", "powerful", "punchy", "heavy", "dance beat", "four on the floor")
+
+
 def edit_style(style: str, add: str, remove: str) -> str:
     drop = [t.strip().lower() for t in remove.split(",") if t.strip()]
-    # "drum" 이 "drums"·"drum machine" 도 빼도록 낱말 포함으로 본다
-    tags = [t.strip() for t in style.split(",") if t.strip() and not any(d in t.strip().lower() or t.strip().lower() in d for d in drop)]
+    no_drums = any("drum" in d or "percussion" in d for d in drop)
+    if no_drums:
+        drop += list(DRUM_HINTS)
+    # "drum" 이 "drums"·"drum machine" 도 빼도록 낱말 포함으로 본다(목소리 성별 태그는 지킨다)
+    tags = [t.strip() for t in style.split(",") if t.strip() and (t.strip().lower() in VOICE_TAGS or
+            not any(d in t.strip().lower() or t.strip().lower() in d for d in drop))]
+    if no_drums:
+        add = ", ".join(x for x in (add, "no drums, no percussion") if x)
     for t in add.split(","):
         if t.strip() and t.strip().lower() not in {x.lower() for x in tags}:
             tags.append(t.strip())
