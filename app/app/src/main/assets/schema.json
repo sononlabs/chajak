@@ -1,0 +1,54 @@
+{
+  "packageName": "ai.sonon.chajak",
+  "invokeWord": "차작",
+  "appDescription": "Chajak turns a melody the driver hums in the car into a finished song with lyrics and cover art, and lets the driver change the arrangement by voice.",
+  "version": "0.4.4-drive",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "START_HUM_RECORDING",
+        "description": "Starts recording the user's humming after a short 3-2-1 sound countdown, so the melody can be turned into a song.",
+        "parameters": { "type": "object", "properties": {}, "required": [] }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "FINISH_HUM_RECORDING",
+        "description": "Ends the humming recording that is in progress, either keeping it to convert into a melody or discarding it.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string",
+              "enum": ["save", "cancel"],
+              "description": "save keeps the recording and converts it into a melody; cancel discards the recording."
+            }
+          },
+          "required": ["result"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "CHANGE_SONG_ARRANGEMENT",
+        "description": "Makes a new version of the song currently open in Chajak with a different arrangement, keeping the user's melody, lyrics and cover.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "string",
+              "description": "The change the user wants to the arrangement, kept in the user's own words and language."
+            }
+          },
+          "required": ["request"]
+        }
+      }
+    }
+  ]
+}

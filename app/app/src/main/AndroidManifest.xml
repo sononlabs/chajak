@@ -30,12 +30,20 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|uiMode">
             <!-- 주행 중에도 듣기 화면은 보여준다. 녹음은 주행 규제가 켜지면 앱이 막는다(21번 시험) -->
             <meta-data android:name="distractionOptimized" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Gleo 음성 명령(assets/schema.json 의 function 이름 = action). "차작, 녹음 시작해 줘" 등 -->
+            <intent-filter>
+                <action android:name="START_HUM_RECORDING" />
+                <action android:name="FINISH_HUM_RECORDING" />
+                <action android:name="CHANGE_SONG_ARRANGEMENT" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

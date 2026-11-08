@@ -141,6 +141,7 @@ class MainActivity : Activity() {
             prefs.getBoolean(TUTORIAL_SEEN, false) -> showHome()
             else -> showTutorial()
         }
+        handleGleo(intent)
     }
 
     private val prefs by lazy { getSharedPreferences("chajak", MODE_PRIVATE) }
@@ -149,9 +150,56 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra("song")?.let { openSong(it) }
+        handleGleo(intent)
     }
 
-    /** 화면을 떠나면 카운트다운·녹음을 멈춘다. 사용자가 모르는 녹음은 없어야 한다. */
+    /**
+     * Gleo 음성 명령 처리(Gleo.kt). 주행 중에도 된다 — 화면을 누르지 않고 말로 하는 길이라서.
+     * 녹음 시작은 Gleo 가 말하기를 끝내고 오디오를 놓을 틈(0.7초)을 둔 뒤 3·2·1 로 들어간다.
+     */
+    private fun handleGleo(intent: Intent?) {
+        val action = intent?.action?.takeIf { it in Gleo.ACTIONS } ?: return
+        setIntent(Intent(this, MainActivity::class.java))  // 화면을 다시 만들 때 같은 명령이 또 돌지 않게
+        val p = Gleo.params(intent)
+        Log.i(tag, "Gleo 명령 $action $p")
+        when (action) {
+            Gleo.START -> when {
+                recording || counting -> Gleo.respond(this, action, "fail", "A recording is already in progress.")
+                pending != null -> Gleo.respond(this, action, "fail", "The previous humming is still being converted. Please try again in a moment.")
+                else -> ui.postDelayed({
+                    stackMode = null
+                    startRecording()
+                    if (counting) Gleo.respond(this, action, "success", "Recording starts after the 3-2-1 beeps. Say finish or press play-pause on the steering wheel when done.", "silent")
+                    else Gleo.respond(this, action, "fail", "Recording could not start because another sound is using the audio. Please try again after it ends.")
+                }, GLEO_GAP_MS)
+            }
+            Gleo.FINISH -> {
+                val cancel = p.optString("result") == "cancel"
+                when {
+                    counting -> { cancelCountdown(); Gleo.respond(this, action, "success", "The recording was cancelled before it started.") }
+                    recording && cancel -> { cancelRecording(); Gleo.respond(this, action, "success", "The recording was cancelled and not saved.") }
+                    recording -> { recorder.stop(); Gleo.respond(this, action, "success", "Recording finished. Turning the humming into a melody now.") }
+                    else -> Gleo.respond(this, action, "fail", "No recording is in progress.")
+                }
+            }
+            Gleo.ARRANGE -> {
+                val req = p.optString("request").trim()
+                val f = song?.optJSONObject("final")
+                when {
+                    req.isEmpty() -> Gleo.respond(this, action, "asking", "How would you like to change the arrangement?")
+                    f == null -> Gleo.respond(this, action, "asking", "Please open the finished song you want to change in Chajak first.")
+                    finalSubmitting || finalJob != null -> Gleo.respond(this, action, "fail", "A new version of this song is already being made.")
+                    recording || counting -> Gleo.respond(this, action, "fail", "Please finish the recording first.")
+                    else -> {
+                        prompt = f.optString("prompt", prompt)
+                        createFinal(from = playerVersion ?: f.optString("id").ifEmpty { null }, keepLyrics = true, keepCover = true, edit = req)
+                        Gleo.respond(this, action, "success", "Making a new version with that arrangement, keeping the melody, lyrics and cover. It takes about three minutes.")
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * 스티어링휠 미디어 키(재생/일시정지)로 녹음 끝내기 — 운전대에서 손을 떼지 않고 "녹음 완료".
      * 차의 미디어 소스(폰 음악)를 가져오지 않아도 된다: 차작 화면이 앞에 있으면 키가 먼저 이 창으로 오고,
@@ -172,6 +220,7 @@ class MainActivity : Activity() {
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
         if (keyCode in FINISH_KEYS && (recording || counting)) true else super.onKeyUp(keyCode, event)
 
+    /** 화면을 떠나면 카운트다운·녹음을 멈춘다. 사용자가 모르는 녹음은 없어야 한다. */
     override fun onPause() {
         super.onPause()
         active = false
@@ -2964,6 +3013,8 @@ class MainActivity : Activity() {
         /** 녹음을 끝내는 스티어링휠·미디어 키: 재생/일시정지 · 일시정지 · 정지 · 이어폰 버튼. */
         val FINISH_KEYS = setOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP,
                                 KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_HEADSETHOOK)
+        /** Gleo 가 말하기를 끝내고 오디오 포커스를 놓을 틈. */
+        const val GLEO_GAP_MS = 700L
         const val CANCELLED = "녹음을 취소했어요. 방금 녹음은 저장하지 않았어요."
         const val FOCUS_LOST = "통화나 안내가 끼어들어 녹음을 멈췄어요. 끝난 뒤 다시 흥얼거려 주세요."
         const val REQ_CAPTURE = 6
