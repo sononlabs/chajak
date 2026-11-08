@@ -223,10 +223,8 @@ class MainActivity : Activity() {
             driving = r.isRequiresDistractionOptimization
             Log.i(tag, "주행 규제 ${if (driving) "켜짐" else "꺼짐"}")
             ui.post {
-                if (driving && recording) {
-                    recorder.stop()
-                    showError("주행 중에는 녹음할 수 없어요. 정차한 뒤 다시 흥얼거려 주세요.")
-                } else if (!recording) refresh()
+                // 주행 중에도 녹음은 계속한다(버튼 한 번으로 시작·그만, 화면을 볼 필요 없음). 녹음 중이 아니면 화면만 새로
+                if (!recording) refresh()
             }
         }
     }
@@ -565,7 +563,6 @@ class MainActivity : Activity() {
             val back = if (song != null) button("곡으로 돌아가기") { stackMode = null; showSong(false) } else null
             when {
                 !retry -> zones(null, listOfNotNull(back?.withMargin()))
-                driving -> zones(back, listOf(recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null)))
                 else -> zones(back, listOf(recordButton(Rec.READY, "다시 흥얼거리기") { startRecording() }))
             }
         }
@@ -1802,7 +1799,7 @@ class MainActivity : Activity() {
      * stack: 곡 화면에서 누르면 그 곡에 겹쳐/이어 쌓고, 그 밖에서는 지금 쌓기 방식(stackMode) 그대로.
      */
     private fun startMusicRecording(stack: String? = stackMode) {
-        if (driving || recording || counting || pending != null || !active) return
+        if (recording || counting || pending != null || !active) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             musicPermissionPending = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MUSIC_RECORD)
@@ -1840,7 +1837,7 @@ class MainActivity : Activity() {
     }
 
     private fun requestCapture() {
-        if (driving || recording || counting || pending != null || !active) return
+        if (recording || counting || pending != null || !active) return
         try {
             capturePending = true
             startActivityForResult(projections.createScreenCaptureIntent(), REQ_CAPTURE)
@@ -2059,7 +2056,6 @@ class MainActivity : Activity() {
     }
 
     private fun startRecording() {
-        if (driving) return showError("주행 중에는 녹음할 수 없어요. 정차한 뒤 다시 흥얼거려 주세요.")
         stopPlayback()
         cancelled = false
         if (testInputs.isNotEmpty()) {
@@ -2125,8 +2121,8 @@ class MainActivity : Activity() {
 
     private var interrupted = false
 
-    // 주행 규칙(15번 v4 4절): 녹음·더 만들기·글자 입력은 정차에서, 듣기·다듬기·🎲·🎤·Create music 은 주행 중에도
-    private val canRecord get() = !driving
+    // 주행 규칙(기획서 v4): 녹음·듣기·다듬기·🎲·🎤·Create music 은 주행 중에도(버튼 한 번), 글자 입력·더 만들기·파일 정리는 정차에서
+    private val canRecord get() = true
 
     private fun releaseFocus() {
         focus?.let { audio.abandonAudioFocusRequest(it); Log.i(tag, "오디오 포커스 반납") }
@@ -2135,9 +2131,8 @@ class MainActivity : Activity() {
 
     private fun countdown(n: Int, token: Int = ++countdownToken) {
         if (token != countdownToken) return
-        if (driving || !active) {
+        if (!active) {
             cancelCountdown()
-            if (driving) showError("주행 중에는 녹음할 수 없어요. 정차 후 다시 시작해 주세요.")
             return
         }
         if (n == 0) {
@@ -2369,13 +2364,11 @@ class MainActivity : Activity() {
                 -1.0
             }
             ui.post {
-                val stoppedByDriving = driving
                 recording = false
                 musicCapturing = false
                 releaseFocus()
                 if (music) holdCapture()
                 when {
-                    stoppedByDriving -> Unit  // 리스너가 이미 안내 화면을 띄움
                     // 취소: 녹음은 버리고 보내지 않는다. 곡 작업 중이었으면 그 곡으로 돌아간다
                     interrupted -> { interrupted = false; cancelled = false; if (active) showError(FOCUS_LOST) }
                     cancelled -> if (active) {
