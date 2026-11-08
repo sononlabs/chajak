@@ -318,6 +318,8 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ 화면
 
     private var current: () -> Unit = {}
+    /** 지금 화면의 위아래 스크롤(같은 화면을 다시 그릴 때 위치를 이어받는다). */
+    private var scroller: ScrollView? = null
 
     private fun refresh(): Unit = current()
 
@@ -326,6 +328,9 @@ class MainActivity : Activity() {
      * tabs: 큰 화면(녹음실·곡·목록·노래 듣기)에만 왼쪽 탭을 둔다. 카운트다운·녹음 중·오류 화면에는 없다(녹음 중 딴 데로 새지 않게).
      */
     private fun show(build: LinearLayout.() -> Unit, again: () -> Unit, tabs: Boolean = false, bar: (LinearLayout.() -> Unit)? = null) {
+        // 같은 화면을 다시 그릴 때(상태 갱신·목록 새로 받기·주행 전환·장치 연결 등)는 스크롤 위치를 지킨다 — 2026-11-08 버그:
+        // 스크롤을 내려 두면 갱신될 때마다 맨 위로 튀었다. 화면 종류는 again 의 클래스로 본다(같은 자리의 람다·함수 참조는 같은 클래스)
+        val keepY = if (current.javaClass == again.javaClass) scroller?.scrollY ?: 0 else 0
         current = again
         halo = null
         glow = null
@@ -347,7 +352,16 @@ class MainActivity : Activity() {
                 addView(body("곡 정보가 일부 비어 있어요. 왼쪽 탭에서 다른 곡을 열거나 새로 흥얼거려 주세요."))
             }
         }
-        page.addView(ScrollView(this).apply { addView(col) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val sv = ScrollView(this).apply { addView(col) }
+        scroller = sv
+        if (keepY > 0) sv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                sv.viewTreeObserver.removeOnPreDrawListener(this)
+                sv.scrollTo(0, keepY)  // 첫 그리기 전에 옮겨서 맨 위가 잠깐 보였다 내려가는 깜빡임이 없게
+                return true
+            }
+        })
+        page.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         if (bar != null) {
             page.addView(View(this).apply { setBackgroundColor(TINT_PRESSED) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)))
             page.addView(LinearLayout(this).apply {
@@ -531,7 +545,7 @@ class MainActivity : Activity() {
             onHome = true
             noticeView()?.let { addView(it) }
             addView(steps(0))
-            addView(titleRow(headline(if (stacking) (if (stackMode == "overlay") "겹쳐 부르기" else "이어 부르기") else "녹음실"), inputPill()))
+            addView(headline(if (stacking) (if (stackMode == "overlay") "겹쳐 부르기" else "이어 부르기") else "녹음실"))
             addView(body(if (stacking) "지금 멜로디 위에 얹을 멜로디를 흥얼거려 주세요. 박자와 조성은 곡에 맞춰 드려요."
                          else "떠오른 한 소절을 흥얼거려 보세요. 듣던 음악은 녹음하는 동안만 멈춰요."))
             addView(caption("5~30초 한 소절이면 가장 잘 돼요(최대 ${MAX_RECORD_SEC}초). 다 부르면 가운데 버튼을 누르세요.", TEXT3))
@@ -551,7 +565,13 @@ class MainActivity : Activity() {
                 listOf(if (!canRecord) recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null)
                        else recordButton(Rec.READY, "녹음 시작") { startRecording() }),
                 if (testInputs.isNotEmpty()) text("시험 모드 · 마이크 대신\n${testInputs[testIndex % testInputs.size]}", BODY_S, POSITIVE)
-                else musicRecordButton(canRecord),
+                // 녹음 장치는 녹음 버튼과 같은 아래 줄 오른쪽에(2026-11-08 사용자: 녹음과 관련된 건 녹음 버튼 가까이) — 녹음 장치 · 음악에서 따기
+                else LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(inputPill(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(32) })
+                    addView(musicRecordButton(canRecord))
+                },
             )
         }
     }
