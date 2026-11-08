@@ -21,7 +21,7 @@ import kotlin.math.sin
  *
  * - 네 가장자리 안쪽으로 따뜻한 색(녹음 빨강 · 코랄 · 앰버 · 핑크)이 번지고, 색이 가장자리를 따라 천천히 흐른다(6초 한 바퀴).
  * - 소리가 클수록 빛이 안쪽으로 더 깊고 진해진다(커질 땐 빨리, 작아질 땐 천천히). 조용해도 옅게 남아 녹음 중임을 계속 보여 준다.
- * - 운전 중 눈을 끌지 않게: 깜빡임 없음, 숨쉬기는 0.5Hz, 터치·화면 낭독은 통과(장식).
+ * - 운전 중 눈을 끌지 않게: 깜빡임 없음, 숨쉬기는 0.5Hz, 주행 중(calm)에는 색 흐름도 멈춘다. 터치·화면 낭독은 통과(장식).
  * - 두 그라디언트(가장자리를 따라 흐르는 색 × 안쪽으로 옅어지는 마스크)를 ComposeShader(DST_IN)로 합쳐 그린다 — 흐림 필터 없이 GPU 로.
  */
 class EdgeGlow(context: Context) : View(context) {
@@ -29,6 +29,9 @@ class EdgeGlow(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shift = Matrix()
+
+    /** 주행 중: 색이 가장자리를 따라 흐르지 않고 제자리(소리 크기 반응과 느린 숨쉬기만). 움직임으로 눈을 끌지 않게. */
+    var calm = false
 
     /** 흐름 0~1(한 바퀴 6초). */
     private var phase = 0f
@@ -76,7 +79,7 @@ class EdgeGlow(context: Context) : View(context) {
         val span = along * 0.6f
         val flow = if (horizontal) LinearGradient(0f, 0f, span, 0f, COLORS, null, Shader.TileMode.MIRROR)
                    else LinearGradient(0f, 0f, 0f, span, COLORS, null, Shader.TileMode.MIRROR)
-        val move = (phase + offset) * span * 2
+        val move = ((if (calm) 0f else phase) + offset) * span * 2
         shift.setTranslate(if (horizontal) move else 0f, if (horizontal) 0f else move)
         flow.setLocalMatrix(shift)
         paint.shader = ComposeShader(flow, mask, PorterDuff.Mode.DST_IN)

@@ -226,6 +226,7 @@ class MainActivity : Activity() {
             driving = r.isRequiresDistractionOptimization
             Log.i(tag, "주행 규제 ${if (driving) "켜짐" else "꺼짐"}")
             ui.post {
+                glow?.calm = driving
                 // 주행 중에도 녹음은 계속한다(버튼 한 번으로 시작·그만, 화면을 볼 필요 없음). 녹음 중이 아니면 화면만 새로
                 if (!recording) refresh()
             }
@@ -855,7 +856,8 @@ class MainActivity : Activity() {
             if (p != null) left.addView(pendingRow(p))
 
             val right = column()
-            if (s != null) right.addView(suggestCard(Suggest.melody(s), idle))
+            // AI 제안은 설명을 읽고 골라야 해서 주행 중에는 숨긴다(정차하면 다시 보인다)
+            if (s != null && !driving) right.addView(suggestCard(Suggest.melody(s), idle))
             val polish = variations.filter { it.id in POLISH }
             if (polish.isNotEmpty()) {
                 right.addView(label("다듬기"))
@@ -1535,6 +1537,8 @@ class MainActivity : Activity() {
     /** 가사 줄(시작 초, 끝 초, 글). 줄 = 2마디 — 곡 계획의 구간 시작·마디 수·템포로 계산한다. */
     private class LyricLine(val start: Float, val end: Float, val view: TextView)
     private var lyricViews = listOf<LyricLine>()
+    /** 주행 중 가사 자리: 지금 부르는 줄 하나. 정차 중이면 null(전체 가사). */
+    private var nowLine: TextView? = null
 
     /**
      * 노래 듣기 화면: 큰 앨범 표지 · 제목 · 주제, 위치를 옮길 수 있는 재생 막대, 가사(구간별).
@@ -1564,7 +1568,8 @@ class MainActivity : Activity() {
                     }
                 }
                 // 가사는 줄이 짧아 표지 아래 좁은 칸에, 넓은 오른쪽 칸은 듣기·다시 만들기에 쓴다(가사가 길어도 다시 만들기가 밀려나지 않게)
-                left.addView(label("가사"))
+                left.addView(label(if (driving) "지금 부르는 줄" else "가사"))
+                nowLine = if (driving) text("♪", TITLE, TEXT).also { left.addView(it) } else null
                 val views = mutableListOf<LyricLine>()
                 val lyr = f.optJSONObject("lyrics") ?: JSONObject()
                 val plan = f.getJSONObject("plan")
@@ -1576,13 +1581,13 @@ class MainActivity : Activity() {
                     val name = sec.getString("name")
                     val lines = lyr.optJSONArray(name) ?: lyr.optJSONArray(name.trimEnd('2')) ?: continue
                     if (lines.length() == 0) continue
-                    left.addView(text(SECTION_NAMES[name.trimEnd('2')] ?: name, BODY_S_STRONG, TEXT3).withMargin(top = 12, bottom = 4))
+                    if (nowLine == null) left.addView(text(SECTION_NAMES[name.trimEnd('2')] ?: name, BODY_S_STRONG, TEXT3).withMargin(top = 12, bottom = 4))
                     val start = sec.getDouble("start_sec").toFloat()
                     val lineSec = sec.optInt("bars", 2 * lines.length()) * barSec / lines.length()
                     for (j in 0 until lines.length()) {
                         val tv = text(lines.getString(j), BODY, TEXT3).withMargin(bottom = 4)
                         views += LyricLine(start + j * lineSec, start + (j + 1) * lineSec, tv)
-                        left.addView(tv)
+                        if (nowLine == null) left.addView(tv)
                     }
                 }
                 if (views.isEmpty()) left.addView(text("연주곡이에요(가사 없음).", BODY, TEXT3))
@@ -1617,7 +1622,7 @@ class MainActivity : Activity() {
                 if (finalJob == null) {
                     col.addView(label("다시 만들기 · 마음에 안 드는 점을 말하거나 제안을 누르세요"))
                     col.addView(editRow(f))
-                    col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 12))
+                    if (!driving) col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 12))
                 }
                 // 다시 만들기(설정 다시 쓰기 · 다른 편곡 · 가사 고치기): 이 버전을 바탕으로 가중치·주제·가사를 바꿔 새 버전
                 col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 가중치·가사·표지 ▾", size = Size.MEDIUM, enabled = finalJob == null) {
@@ -1679,6 +1684,7 @@ class MainActivity : Activity() {
             if (!seek.isPressed) seek.progress = (pos / total * 1000).toInt()
             time.text = "${clock(pos)} / ${clock(total)}"
             // 지금 부르는 줄만 빨갛게, 지난 줄은 진하게, 남은 줄은 옅게(구간 사이 간주에는 빨간 줄 없음)
+            nowLine?.text = lyricViews.firstOrNull { pos >= it.start && pos < it.end }?.view?.text ?: "♪"
             lyricViews.forEach { l ->
                 l.view.setTextColor(when {
                     pos <= 0f || pos < l.start -> TEXT3
@@ -1833,6 +1839,7 @@ class MainActivity : Activity() {
         if (android.os.Build.VERSION.SDK_INT < 29) return record(music = true)  // 재생 소리 녹음은 Android 10 부터
         // 이미 동의받은 게 살아 있으면(마지막 녹음 뒤 10분 안) 다시 묻지 않고 바로 담는다
         if (projection != null) { ui.removeCallbacks(captureIdle); return record(music = true) }
+        if (driving) return  // 버튼이 "처음은 정차 후에"로 꺼져 있다 — 긴 설명과 시스템 창을 주행 중에 띄우지 않는다
         // 시스템 동의 창은 앱이 꾸밀 수 없다(문구·모양 고정) — 그래서 뜨기 전에 우리 화면으로 무엇을 묻는 창인지 먼저 알린다
         showCapturePrimer()
     }
@@ -2337,7 +2344,7 @@ class MainActivity : Activity() {
         musicCapturing = music  // showRecording 의 안내 문구가 음악용인지 본다
         showRecording(music, direct = capture != null)
         // 소리 안내(3·2·1 · 띠링)에 더해 눈으로도 녹음 중임을 바로 알게 — 화면 맨 위에 겹친다(터치는 통과)
-        glow = EdgeGlow(this).also { root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        glow = EdgeGlow(this).also { it.calm = driving; root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
         recording = true
         cancelled = false
         if (music) Log.i(tag, "음악 녹음 시작: ${if (capture != null) "재생 소리 직접" else "차량 마이크"}, 포커스 요청 없음")
@@ -2746,8 +2753,11 @@ class MainActivity : Activity() {
      * · 변환 중 = 회색 원 + 진행 표시 · 주행 중 = 비활성 원 + 사선 마이크.
      */
     /** 기존 빨간 버튼 오른쪽의 작은 음악 녹음 버튼. 터치 영역은 80dp. */
-    private fun musicRecordButton(enabled: Boolean, stack: String? = stackMode): View = column().apply {
+    private fun musicRecordButton(on: Boolean, stack: String? = stackMode): View = column().apply {
         gravity = Gravity.CENTER_HORIZONTAL
+        // 처음(동의 전)에는 설명 화면과 시스템 확인 창이 떠서 주행 중에는 막는다. 동의가 살아 있으면(10분) 주행 중에도 한 번에
+        val firstTime = driving && projection == null && android.os.Build.VERSION.SDK_INT >= 29
+        val enabled = on && !firstTime
         val core = FrameLayout(this@MainActivity).apply {
             background = if (enabled) pressable(oval(POSITIVE), oval(GRAY_700)) else oval(TINT)
             contentDescription = if (enabled) "음악을 멈추지 않고 녹음해 멜로디로" else "음악 녹음 사용 불가"
@@ -2757,7 +2767,7 @@ class MainActivity : Activity() {
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         }
         addView(core, LinearLayout.LayoutParams(dp(80), dp(80)))
-        addView(text("음악에서 따기", BODY_S, if (enabled) TEXT else TEXT3).withMargin(top = 8))
+        addView(text(if (firstTime) "처음은 정차 후에" else "음악에서 따기", BODY_S, if (enabled) TEXT else TEXT3).withMargin(top = 8))
     }
 
     private fun recordButton(state: Rec, caption: String, count: Int = 0, onClick: (() -> Unit)?): View {
