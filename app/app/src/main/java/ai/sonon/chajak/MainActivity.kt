@@ -35,6 +35,7 @@ import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -151,6 +152,26 @@ class MainActivity : Activity() {
     }
 
     /** 화면을 떠나면 카운트다운·녹음을 멈춘다. 사용자가 모르는 녹음은 없어야 한다. */
+    /**
+     * 스티어링휠 미디어 키(재생/일시정지)로 녹음 끝내기 — 운전대에서 손을 떼지 않고 "녹음 완료".
+     * 차의 미디어 소스(폰 음악)를 가져오지 않아도 된다: 차작 화면이 앞에 있으면 키가 먼저 이 창으로 오고,
+     * 여기서 쓰지 않은 키만 시스템이 미디어 세션으로 넘긴다. 녹음·카운트다운 중에만 가로채고 그 밖에는 그대로 흘려보낸다.
+     * 카운트다운 중 = 녹음 취소(가운데 버튼과 같게), 녹음 중 = 녹음 완료. 음악에서 따기도 같다.
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode !in FINISH_KEYS || !(recording || counting)) return super.onKeyDown(keyCode, event)
+        if (event.repeatCount > 0) return true
+        Log.i(tag, "스티어링휠 키 ${KeyEvent.keyCodeToString(keyCode)} → ${if (counting) "녹음 취소" else "녹음 완료"}")
+        when {
+            counting -> cancelCountdown()
+            drill == Drill.SING || recording -> recorder.stop()
+        }
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        if (keyCode in FINISH_KEYS && (recording || counting)) true else super.onKeyUp(keyCode, event)
+
     override fun onPause() {
         super.onPause()
         active = false
@@ -305,6 +326,7 @@ class MainActivity : Activity() {
 
     private fun tabRail() = column().apply {
         setBackgroundColor(SURFACE)
+        gravity = Gravity.CENTER_VERTICAL  // 탭 세 칸을 화면 세로 가운데에 모은다(2026-11-08 사용자 요청)
         setPadding(dp(16), dp(PAGE_V), dp(16), dp(PAGE_V))
         Tab.values().forEach { t ->
             val on = t == tab
@@ -315,7 +337,7 @@ class MainActivity : Activity() {
                 setOnClickListener { openTab(t) }
                 addView(text(t.glyph, TITLE, if (on) RECORDING.takeIf { t == Tab.STUDIO } ?: TEXT else TEXT3).apply { gravity = Gravity.CENTER })
                 addView(text(t.label, if (on) BODY_S_STRONG else BODY_S, if (on) TEXT else TEXT2).apply { gravity = Gravity.CENTER }.withMargin(top = 4))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_H)).apply { bottomMargin = dp(12) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_H)).apply { if (t != Tab.values().last()) bottomMargin = dp(TAB_GAP) })
         }
     }
 
@@ -535,7 +557,7 @@ class MainActivity : Activity() {
             addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
         }
         addView(body(when {
-            !music -> "다 부르면 가운데 버튼을 누르세요. 녹음 장치: ${inputDevice?.let(InputDevices::label) ?: DEFAULT_INPUT}"
+            !music -> "다 부르면 가운데 버튼이나 스티어링휠 재생·일시정지 키를 누르세요. 녹음 장치: ${inputDevice?.let(InputDevices::label) ?: DEFAULT_INPUT}"
             direct -> "재생 중인 음악을 그대로 담고 있어요(음악은 멈추지 않아요). 원하는 부분이 끝나면 가운데 버튼을 누르세요. 남의 노래 멜로디는 내 노래로 공유하지 마세요."
             else -> "차량 마이크로 음악을 듣고 있어요. 원하는 부분이 끝나면 가운데 버튼을 누르세요."
         }).withMargin(top = 12))
@@ -2939,6 +2961,9 @@ class MainActivity : Activity() {
         val STEPS = listOf("흥얼거리기", "내 멜로디", "노래 만들기", "완성")
         const val INPUT_MENU_W = 560
         const val FOCUS_DENIED = "지금은 녹음할 수 없어요. 통화나 안내가 끝난 뒤 다시 흥얼거려 주세요."
+        /** 녹음을 끝내는 스티어링휠·미디어 키: 재생/일시정지 · 일시정지 · 정지 · 이어폰 버튼. */
+        val FINISH_KEYS = setOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP,
+                                KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_HEADSETHOOK)
         const val CANCELLED = "녹음을 취소했어요. 방금 녹음은 저장하지 않았어요."
         const val FOCUS_LOST = "통화나 안내가 끼어들어 녹음을 멈췄어요. 끝난 뒤 다시 흥얼거려 주세요."
         const val REQ_CAPTURE = 6
@@ -2969,8 +2994,10 @@ class MainActivity : Activity() {
         /** 홈 "내 노래": 받아 올 곡 수 · 보여 줄 카드 수 · 표지 크기. */
         const val LIBRARY_SIZE = 50
         /** 왼쪽 탭 폭·한 칸 높이, 음악 탭 표지 높이(dp). */
-        const val TAB_W = 200
-        const val TAB_H = 120
+        /** 왼쪽 탭: 칸 200×168, 칸 사이 32(2026-11-08 사용자 요청 "버튼 영역 키우고 간격 띄우기" — 처음 168×120·간격 12). */
+        const val TAB_W = 232
+        const val TAB_H = 168
+        const val TAB_GAP = 32
         const val MUSIC_COVER = 240
         const val OPTION_W = 640
         /** 시작음 '띠링'(0.3초)이 끝나자마자 녹음을 여는 간격 — 효과음은 섞이지 않게, 첫 음은 놓치지 않게. */
