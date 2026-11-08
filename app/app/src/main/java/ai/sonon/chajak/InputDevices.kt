@@ -12,7 +12,7 @@ import android.media.AudioManager
 object InputDevices {
 
     /** 녹음에 쓸 만한 입력(에코 기준·원격 믹스·라디오·내부 버스는 뺀다). */
-    private val USABLE = setOf(
+    val USABLE = setOf(
         AudioDeviceInfo.TYPE_BUILTIN_MIC, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_WIRED_HEADSET,
         AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_ACCESSORY,
         AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_LINE_DIGITAL, AudioDeviceInfo.TYPE_TELEPHONY,

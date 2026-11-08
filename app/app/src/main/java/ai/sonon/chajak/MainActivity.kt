@@ -332,6 +332,7 @@ class MainActivity : Activity() {
         scoreToken++
         onHome = false
         onList = false
+        onDeviceCheck = false
         root.removeAllViews()
         val page = column()
         val col = column().apply {
@@ -1908,6 +1909,9 @@ class MainActivity : Activity() {
         stopPlayback()
         stackMode = stack
         if (android.os.Build.VERSION.SDK_INT < 29) return record(music = true)  // 재생 소리 녹음은 Android 10 부터
+        // 차 안(앱들)에서 재생 중인 소리가 없으면 직접 담을 게 없다 — PC·폰 스피커로 트는 음악은 마이크로 담는다(2026-11-08:
+        // 동의를 받아 두면 늘 재생 소리만 담아서, 에뮬레이터 밖 PC 에서 튼 음악이 무음으로 녹음됐다)
+        if (!musicNeedsCapture()) { Log.i(tag, "음악에서 따기: 마이크로(${prefs.getString(MUSIC_SOURCE, "auto")})"); return record(music = true, viaMic = true) }
         // 이미 동의받은 게 살아 있으면(마지막 녹음 뒤 10분 안) 다시 묻지 않고 바로 담는다
         if (projection != null) { ui.removeCallbacks(captureIdle); return record(music = true) }
         if (driving) return  // 버튼이 "처음은 정차 후에"로 꺼져 있다 — 긴 설명과 시스템 창을 주행 중에 띄우지 않는다
@@ -2309,8 +2313,8 @@ class MainActivity : Activity() {
 
     /** 폰·헤드셋·USB 마이크가 붙거나 빠지면 녹음실의 목록을 다시 그린다. */
     private val deviceWatch = object : android.media.AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) { if (onHome && !recording) refresh() }
-        override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) { if (onHome && !recording) refresh() }
+        override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) { if ((onHome || onDeviceCheck) && !recording && probing == null) refresh() }
+        override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) { if ((onHome || onDeviceCheck) && !recording && probing == null) refresh() }
     }
 
     /**
@@ -2377,9 +2381,13 @@ class MainActivity : Activity() {
                     override fun getCount() = names.size + 1
                     override fun getItem(i: Int) = names.getOrNull(i)
                     override fun getItemId(i: Int) = i.toLong()
-                    override fun isEnabled(i: Int) = i < names.size
+                    override fun isEnabled(i: Int) = true
                     override fun getView(i: Int, convert: View?, parent: ViewGroup?): View =
-                        if (i == names.size) text("폰 마이크는 차가 인식할 때만 보여요.", BODY_S, TEXT3).apply { setPadding(dp(24), dp(12), dp(24), dp(16)) }
+                        if (i == names.size) column().apply {
+                            setPadding(dp(24), dp(16), dp(24), dp(16))
+                            addView(text("🔍  인식된 장치 전부 보기 · 소리 확인", BODY_S_STRONG, POSITIVE))
+                            addView(text("폰 마이크는 차가 인식할 때만 보여요.", BODY_S, TEXT3).withMargin(top = 4))
+                        }
                         else LinearLayout(this@MainActivity).apply {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = Gravity.CENTER_VERTICAL
@@ -2390,7 +2398,7 @@ class MainActivity : Activity() {
                         }
                 })
                 popup.setOnItemClickListener { _, _, i, _ ->
-                    if (i >= devices.size) return@setOnItemClickListener
+                    if (i >= devices.size) { popup.dismiss(); showDeviceCheck(); return@setOnItemClickListener }
                     InputDevices.choose(prefs, devices[i])
                     Log.i(this@MainActivity.tag, "녹음 장치: ${names[i]}")
                     popup.dismiss()
@@ -2402,6 +2410,120 @@ class MainActivity : Activity() {
         return pill
     }
 
+    /** 음악에서 따기를 "재생 소리 직접"으로 할지. 자동이면 차 안에서 재생 중인 소리가 있을 때만. */
+    private fun musicNeedsCapture(): Boolean = when (prefs.getString(MUSIC_SOURCE, "auto")) {
+        "direct" -> true
+        "mic" -> false
+        else -> DeviceCheck.capturablePlaying(audio)
+    }
+
+    private var onDeviceCheck = false
+    /** 소리 재는 중인 장치 키(기본 마이크 = DEFAULT_KEY). 화면이 바뀌면 멈춘다. */
+    private var probing: String? = null
+    private val probeResults = mutableMapOf<String, String>()
+    private var probeMeters: Map<String, TextView> = emptyMap()
+
+    /**
+     * 녹음 장치 확인 화면(정차 중, 녹음 장치 알약 → "인식된 장치 전부 보기"). 2026-11-08 사용자: "지금 뭐가 인식되는지 모르겠다".
+     * 입력 장치 전부 · 장치마다 소리 확인(몇 초 재기만, 저장 안 함) · 음악에서 따기 상태와 담는 방법.
+     */
+    private fun showDeviceCheck() {
+        val all = DeviceCheck.inputs(audio)
+        val chosen = inputDevice
+        val meters = mutableMapOf<String, TextView>()
+        show({
+            onDeviceCheck = true
+            addView(headline("녹음 장치 확인"))
+            addView(body("차가 알려 주는 입력 장치 ${all.size}개예요. '소리 확인'을 누르면 몇 초 동안 소리 크기만 재요(녹음은 저장하지 않아요)."))
+            if (DeviceCheck.emulator) addView(column().apply {
+                background = round(SURFACE, 24, POSITIVE)
+                setPadding(dp(28), dp(20), dp(28), dp(20))
+                addView(text("에뮬레이터예요", BODY_STRONG, TEXT))
+                addView(text("'차량 마이크'(Built-In Mic)와 '뒷좌석 마이크'(Built-In Back Mic)는 지금은 둘 다 PC 마이크로 들어와요. " +
+                             "실제 차에서는 각각 앞·뒤 실내 마이크예요. 소리가 안 들어오면 에뮬레이터 설정의 마이크(PC 오디오 입력 사용)를 켜 주세요.", BODY_S, TEXT2).withMargin(top = 6))
+            }.withMargin(top = 16, fill = true))
+
+            addView(label("입력 장치"))
+            fun deviceRow(d: android.media.AudioDeviceInfo?) = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = round(SURFACE, 24)
+                setPadding(dp(28), dp(20), dp(20), dp(20))
+                val key = d?.let(InputDevices::key) ?: DEFAULT_KEY
+                val usable = d == null || DeviceCheck.usable(d)
+                val picked = (d == null && chosen == null) || (d != null && chosen != null && InputDevices.key(d) == InputDevices.key(chosen))
+                addView(column().apply {
+                    addView(text((if (d == null) DEFAULT_INPUT else if (usable) InputDevices.label(d) else DeviceCheck.typeName(d.type)) +
+                                 (if (picked) "  ✓ 지금 고름" else ""), BODY_STRONG, if (usable) TEXT else TEXT3))
+                    addView(text(if (d == null) "시스템이 고르는 마이크 — 실제로 어느 장치인지는 소리 확인에 나와요"
+                                 else "${DeviceCheck.typeName(d.type)} · ${DeviceCheck.rawName(d)} · id ${d.id}" +
+                                      (if (usable) "" else " · 녹음 장치 목록에는 안 올려요"), BODY_S, TEXT3).withMargin(top = 4))
+                    val m = text(probeResults[key] ?: "", BODY_S_STRONG, TEXT2).withMargin(top = 4)
+                    meters[key] = m
+                    addView(m)
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                if (usable) addView(button(if (probing == key) "재는 중…" else "소리 확인", size = Size.MEDIUM,
+                                           enabled = probing == null && !recording && !counting) { probeDevice(d, key) })
+            }
+            listOf<android.media.AudioDeviceInfo?>(null).plus(all.sortedBy { if (DeviceCheck.usable(it)) 0 else 1 }).forEach {
+                addView(deviceRow(it).withMargin(bottom = 12, fill = true))
+            }
+
+            addView(label("음악에서 따기"))
+            val sdkOk = android.os.Build.VERSION.SDK_INT >= 29
+            val playing = DeviceCheck.playing(audio)
+            addView(column().apply {
+                background = round(SURFACE, 24)
+                setPadding(dp(28), dp(20), dp(28), dp(24))
+                addView(text("재생 소리 직접 담기: " + (if (sdkOk) "가능(Android ${android.os.Build.VERSION.RELEASE})" else "불가 — Android 10 이상 필요"), BODY, TEXT))
+                addView(text("녹화·전송 동의: " + (if (projection != null) "받아 둠(마지막 녹음 뒤 10분 동안 다시 안 물어요)" else "아직 없음(처음 직접 담을 때 한 번 물어요)"), BODY, TEXT).withMargin(top = 6))
+                addView(text("지금 차 안에서 재생 중인 소리: " + (if (playing.isEmpty()) "없음" else playing.joinToString(" · ")), BODY, TEXT).withMargin(top = 6))
+                addView(text(when {
+                    playing.isEmpty() && DeviceCheck.emulator -> "PC 나 폰 스피커로 트는 음악은 에뮬레이터 안에서 재생되는 게 아니라서 직접 담을 수 없어요. 마이크(지금은 PC 마이크)로 담아요."
+                    playing.isEmpty() -> "재생 중인 소리가 없으면 차량 마이크로 실내에 들리는 음악을 담아요."
+                    else -> "자동이면 지금 재생 중인 소리를 직접 담아요(음악은 멈추지 않아요)."
+                }, BODY_S, TEXT3).withMargin(top = 10))
+                addView(text("담는 방법", BODY_S_STRONG, TEXT3).withMargin(top = 20, bottom = 8))
+                val modes = listOf("auto", "direct", "mic")
+                addView(segmented(listOf("자동", "재생 소리 직접", "마이크로"), modes.indexOf(prefs.getString(MUSIC_SOURCE, "auto")).coerceAtLeast(0)) { i ->
+                    prefs.edit().putString(MUSIC_SOURCE, modes[i]).apply(); showDeviceCheck()
+                })
+                addView(text("지금 누르면: " + (if (musicNeedsCapture()) "재생 소리를 직접 담아요" else "마이크로 담아요"), BODY_S_STRONG, POSITIVE).withMargin(top = 12))
+            }.withMargin(fill = true))
+        }, ::showDeviceCheck, tabs = true) {
+            zones(button("← 녹음실") { showHome() }, listOf(), button("다시 확인") { probeResults.clear(); showDeviceCheck() })
+        }
+        probeMeters = meters
+    }
+
+    /** 장치 하나의 소리 크기를 몇 초 잰다(저장 안 함). 화면을 떠나면 멈춘다. */
+    private fun probeDevice(d: android.media.AudioDeviceInfo?, key: String) {
+        if (probing != null || recording || counting) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1); return
+        }
+        probing = key
+        probeResults[key] = "듣는 중… 말하거나 흥얼거려 보세요"
+        showDeviceCheck()
+        rec.execute {
+            val result = runCatching {
+                DeviceCheck.probe(d, PROBE_SEC, stop = { !onDeviceCheck || !active }) { db ->
+                    val bars = ((db + 60) / 5).toInt().coerceIn(0, 10)
+                    ui.post { probeMeters[key]?.text = "지금 ${db.toInt()} dB  " + "▮".repeat(bars) + "▯".repeat(10 - bars) }
+                }
+            }
+            ui.post {
+                probing = null
+                probeResults[key] = result.fold({ r ->
+                    (if (r.maxDb > -50) "✓ 소리가 들어와요(가장 큰 소리 ${r.maxDb.toInt()} dB)" else "✕ 거의 안 들려요(가장 큰 소리 ${r.maxDb.toInt()} dB)") +
+                        (r.routed?.let { "\n실제로 녹음된 장치: $it" } ?: "")
+                }, { "✕ 열지 못했어요: ${it.message}" })
+                Log.i(tag, "소리 확인 $key → ${probeResults[key]}")
+                if (onDeviceCheck) showDeviceCheck()
+            }
+        }
+    }
+
     /** 녹음 중 "녹음 취소": 지금까지 녹음은 버린다(서버로 안 보냄). */
     private fun cancelRecording() {
         if (!recording) return
@@ -2410,8 +2532,8 @@ class MainActivity : Activity() {
     }
 
     /** music: 음악 녹음(포커스 없이, 재생 소리 직접 또는 마이크). 끝나면 허밍과 같은 흐름 + 보관함에 원본. */
-    private fun record(music: Boolean = false) {
-        val capture = if (music && android.os.Build.VERSION.SDK_INT >= 29) projection else null
+    private fun record(music: Boolean = false, viaMic: Boolean = false) {
+        val capture = if (music && !viaMic && android.os.Build.VERSION.SDK_INT >= 29) projection else null
         musicCapturing = music  // showRecording 의 안내 문구가 음악용인지 본다
         showRecording(music, direct = capture != null)
         // 소리 안내(3·2·1 · 띠링)에 더해 눈으로도 녹음 중임을 바로 알게 — 화면 맨 위에 겹친다(터치는 통과)
@@ -2827,7 +2949,7 @@ class MainActivity : Activity() {
     private fun musicRecordButton(on: Boolean, stack: String? = stackMode): View = column().apply {
         gravity = Gravity.CENTER_HORIZONTAL
         // 처음(동의 전)에는 설명 화면과 시스템 확인 창이 떠서 주행 중에는 막는다. 동의가 살아 있으면(10분) 주행 중에도 한 번에
-        val firstTime = driving && projection == null && android.os.Build.VERSION.SDK_INT >= 29
+        val firstTime = driving && projection == null && android.os.Build.VERSION.SDK_INT >= 29 && musicNeedsCapture()
         val enabled = on && !firstTime
         val core = FrameLayout(this@MainActivity).apply {
             background = if (enabled) pressable(oval(POSITIVE), oval(GRAY_700)) else oval(TINT)
@@ -3015,6 +3137,9 @@ class MainActivity : Activity() {
                                 KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_HEADSETHOOK)
         /** Gleo 가 말하기를 끝내고 오디오 포커스를 놓을 틈. */
         const val GLEO_GAP_MS = 700L
+        const val MUSIC_SOURCE = "music_source"
+        const val DEFAULT_KEY = "default"
+        const val PROBE_SEC = 4
         const val CANCELLED = "녹음을 취소했어요. 방금 녹음은 저장하지 않았어요."
         const val FOCUS_LOST = "통화나 안내가 끼어들어 녹음을 멈췄어요. 끝난 뒤 다시 흥얼거려 주세요."
         const val REQ_CAPTURE = 6
