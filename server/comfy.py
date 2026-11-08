@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 import uuid
 
@@ -246,8 +247,15 @@ COVER_CLIP = "qwen_3_4b_fp8_mixed.safetensors"
 COVER_VAE = "z_image_ae.safetensors"
 
 
+# 2026-11-08 비교(리서치 39 6절): Qwen-Image-2512 + Lightning 4단계가 글자 새는 일·장면 반영이 더 낫다.
+# 곡 끝까지 재 보니(노래 모델 YuE2 와 교대 포함) 표지 15→19초, 곡 전체 약 159→161초 → 기본을 Qwen 으로. 되돌리려면 CHAJAK_COVER_MODEL=zimage
+COVER_MODEL = os.environ.get("CHAJAK_COVER_MODEL", "qwen2512")
+
+
 def cover_graph(prompt: str, seed: int, prefix: str) -> dict:
-    """앨범 표지: Z-Image Turbo(8단계). 글자 없는 정사각형 그림."""
+    """앨범 표지: Z-Image Turbo(8단계) 또는 Qwen-Image-2512(4단계). 글자 없는 정사각형 그림."""
+    if COVER_MODEL == "qwen2512":
+        return cover_graph_qwen(prompt, seed, prefix)
     return {
         "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": COVER_UNET, "weight_dtype": "default"}},
         "shift": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["unet", 0], "shift": 3.0}},
@@ -262,6 +270,25 @@ def cover_graph(prompt: str, seed: int, prefix: str) -> dict:
         "save": {"class_type": "SaveImage", "inputs": {"images": ["dec", 0], "filename_prefix": prefix}},
     }
 
+
+
+def cover_graph_qwen(prompt: str, seed: int, prefix: str) -> dict:
+    """앨범 표지: Qwen-Image-2512 fp8 + Lightning 4단계 LoRA(둘 다 Apache 2.0 — 모델 카드 원문 확인 필요)."""
+    return {
+        "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_2512_fp8_e4m3fn.safetensors", "weight_dtype": "default"}},
+        "lora": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["unet", 0], "lora_name": "Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors",
+                                                               "strength_model": 1.0}},
+        "shift": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["lora", 0], "shift": 3.1}},
+        "clip": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
+        "pos": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["clip", 0], "text": prompt}},
+        "neg": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["pos", 0]}},
+        "lat": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "ks": {"class_type": "KSampler", "inputs": {"model": ["shift", 0], "seed": seed, "steps": 4, "cfg": 1.0, "sampler_name": "euler",
+                                                  "scheduler": "simple", "positive": ["pos", 0], "negative": ["neg", 0], "latent_image": ["lat", 0], "denoise": 1.0}},
+        "vae": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+        "dec": {"class_type": "VAEDecode", "inputs": {"samples": ["ks", 0], "vae": ["vae", 0]}},
+        "save": {"class_type": "SaveImage", "inputs": {"images": ["dec", 0], "filename_prefix": prefix}},
+    }
 
 def final_graph(abc: str, style: str, lyrics: str, seed: int, seconds: float, prefix: str,
                 temperature: float = 0.7, cfg_scale: float = 1.0) -> dict:

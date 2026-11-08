@@ -23,7 +23,7 @@
 
 ## 실행 순서
 
-1. ComfyUI 에 `comfyui-node/pleos_melody_instrument` 를 `custom_nodes` 로 넣고 켠다(SheetSage2·YuE2·Z-Image 모델 필요).
+1. ComfyUI 에 `comfyui-node/pleos_melody_instrument` 를 `custom_nodes` 로 넣고 켠다(SheetSage2·YuE2·Qwen-Image-2512(+Lightning 4단계 LoRA) 모델 필요. Z-Image Turbo 로 바꾸려면 `CHAJAK_COVER_MODEL=zimage`).
 2. Ollama 에 `gemma3:12b` 를 받아 둔다(가사·말로 바꾸기).
 3. `server/` 에서 `python server.py --port 8790`.
 4. Pleos Connect 에뮬레이터에 `app/apk/*.apk` 설치(`adb install -r --user 10 …`).
