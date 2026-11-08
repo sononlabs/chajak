@@ -14,8 +14,10 @@ object GuideTone {
     /** 차량 출력 버스(bus0_media_out)와 같은 48kHz — 다시 샘플링하지 않게. */
     private const val SR = 48000
 
-    /** 카운트다운 효과음: 3·2·1 은 짧은 '삑'(A5), 시작은 한 옥타브 위로 조금 길게. */
-    fun beep(start: Boolean): AudioTrack = play(listOf(NoteRoll.Note(0f, if (start) 0.25f else 0.12f, if (start) 93 else 81)))
+    /** 카운트다운 효과음: 3·2·1 은 짧은 '삑'(A5 한 음), 시작은 올라가는 두 음 '띠링'(E6 → A6) — 화면을 안 봐도 "이제 부르면 된다"를 소리 모양으로 구분한다. */
+    fun beep(start: Boolean): AudioTrack = play(
+        if (start) listOf(NoteRoll.Note(0f, 0.1f, 88), NoteRoll.Note(0.1f, 0.2f, 93))
+        else listOf(NoteRoll.Note(0f, 0.12f, 81)))
 
     fun play(notes: List<NoteRoll.Note>): AudioTrack {
         val end = notes.maxOf { it.start + it.dur }

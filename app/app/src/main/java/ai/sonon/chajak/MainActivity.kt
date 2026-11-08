@@ -16,6 +16,9 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.text.Editable
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.text.TextWatcher
 import android.widget.EditText
 import android.widget.SeekBar
@@ -254,6 +257,7 @@ class MainActivity : Activity() {
     private fun show(build: LinearLayout.() -> Unit, again: () -> Unit, tabs: Boolean = false, bar: (LinearLayout.() -> Unit)? = null) {
         current = again
         halo = null
+        glow = null
         scoreToken++
         onHome = false
         onList = false
@@ -438,6 +442,10 @@ class MainActivity : Activity() {
     }
 
     private var onHome = false
+    /** 다음 화면 맨 위에 한 번만 보여 줄 한 줄(녹음 취소 등). */
+    private var notice: String? = null
+
+    private fun noticeView(): View? = notice?.let { n -> notice = null; caption(n, TEXT).withMargin(bottom = 8) }
 
     /**
      * 1단계 녹음실: 녹음 전에는 아무것도 고르지 않는다(악기·반주는 기본값, 다듬기는 2단계에서). 큰 빨간 버튼 하나.
@@ -448,6 +456,7 @@ class MainActivity : Activity() {
         val stacking = stackMode != null && song != null
         show({
             onHome = true
+            noticeView()?.let { addView(it) }
             addView(steps(0))
             addView(titleRow(headline(if (stacking) (if (stackMode == "overlay") "겹쳐 부르기" else "이어 부르기") else "녹음실"), inputPill()))
             addView(body(if (stacking) "지금 멜로디 위에 얹을 멜로디를 흥얼거려 주세요. 박자와 조성은 곡에 맞춰 드려요."
@@ -467,7 +476,7 @@ class MainActivity : Activity() {
             zones(
                 if (stacking) button("내 멜로디로") { stackMode = null; showSong(false) } else button("흥얼거리기 요령") { showTutorial() },
                 listOf(if (!canRecord) recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null)
-                       else recordButton(Rec.READY, "흥얼거리기 시작") { startRecording() }),
+                       else recordButton(Rec.READY, "녹음 시작") { startRecording() }),
                 if (testInputs.isNotEmpty()) text("시험 모드 · 마이크 대신\n${testInputs[testIndex % testInputs.size]}", BODY_S, POSITIVE)
                 else musicRecordButton(canRecord),
             )
@@ -495,10 +504,12 @@ class MainActivity : Activity() {
     }
 
     private fun showCountdown(n: Int): Unit = show({
-        addView(headline("곧 녹음을 시작해요"))
-        addView(body("마이크 가까이에서 편하게 흥얼거려 주세요. 가운데 버튼을 누르면 취소돼요."))
+        // 0 = '띠링' 이 울리는 순간 — 녹음이 열리기 직전 화면에도 "지금"을 보여 준다
+        addView(headline(if (n == 0) "지금 흥얼거리세요!" else "곧 녹음을 시작해요"))
+        addView(body("3·2·1 '삑' 소리 뒤에 높은 '띠링' 소리가 나면 바로 흥얼거리세요. 시작 전에 그만두려면 녹음 취소를 누르세요."))
     }, {}) {
-        zones(null, listOf(recordButton(Rec.COUNTDOWN, "누르면 취소", count = n) { cancelCountdown() }))
+        // 시작 전에도 취소는 녹음 중과 같은 자리(왼쪽)에 — 가운데 숫자 버튼을 눌러도 취소된다
+        zones(button("✕  녹음 취소") { cancelCountdown() }, listOf(recordButton(Rec.COUNTDOWN, "녹음 취소", count = n) { cancelCountdown() }))
     }
 
     private lateinit var remain: TextView
@@ -529,7 +540,8 @@ class MainActivity : Activity() {
         }).withMargin(top = 12))
         setHearing(Hearing.WAITING)
     }, {}) {
-        zones(button("녹음 취소") { cancelRecording() }, listOf(recordButton(Rec.RECORDING, "그만 · 바로 변환") { recorder.stop() }))
+        // 녹음 세 동작: 시작(녹음실 가운데) · 완료(가운데 — 바로 음표로) · 취소(왼쪽 — 녹음을 버리고 돌아감)
+        zones(button("✕  녹음 취소") { cancelRecording() }, listOf(recordButton(Rec.RECORDING, "녹음 완료") { recorder.stop() }))
     }
 
     /** 흥얼거림이 들리는 동안 녹음 버튼 둘레로 빨간 고리가 퍼져 나간다. */
@@ -549,8 +561,10 @@ class MainActivity : Activity() {
         if (state == hearingState && hearing.text.isNotEmpty()) return
         hearingState = state
         // 음악에서 따기는 흥얼거리는 게 아니라 재생 소리를 담는다 — 문구만 음악용으로(2026-11-07 "흥얼거려 보세요"가 떴다)
-        hearing.text = if (musicCapturing) state.music else state.message
-        hearing.setTextColor(if (state == Hearing.VOICE) ACTIVE else TEXT3)
+        val msg = if (musicCapturing) state.music else state.message
+        // 초록(ACTIVE) 글자는 바탕 대비 2.2:1 이라 읽기 어렵다 — 글자는 진하게, 앞의 ● 점만 초록(UX 가이드 4-2)
+        hearing.text = if (state == Hearing.VOICE) dot(msg, ACTIVE) else msg
+        hearing.setTextColor(if (state == Hearing.VOICE) TEXT else TEXT3)
     }
 
     /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주·트랙 빼기 오류면 곡으로 돌아간다. */
@@ -563,7 +577,7 @@ class MainActivity : Activity() {
             val back = if (song != null) button("곡으로 돌아가기") { stackMode = null; showSong(false) } else null
             when {
                 !retry -> zones(null, listOfNotNull(back?.withMargin()))
-                else -> zones(back, listOf(recordButton(Rec.READY, "다시 흥얼거리기") { startRecording() }))
+                else -> zones(back, listOf(recordButton(Rec.READY, "다시 녹음 시작") { startRecording() }))
             }
         }
     }
@@ -589,8 +603,8 @@ class MainActivity : Activity() {
             addView(label("음 따라 부르기 연습"))
             (roll.parent as? ViewGroup)?.removeView(roll)
             addView(roll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(DRILL_ROLL)))
-            drillStatus = text(drillText(), if (drill == Drill.RESULT) TITLE else BODY_STRONG,
-                               if (drill == Drill.RESULT) (if (drillGood) ACTIVE else RECORDING) else TEXT2).withMargin(top = 16)
+            drillStatus = text("", if (drill == Drill.RESULT) TITLE else BODY_STRONG, if (drill == Drill.RESULT) TEXT else TEXT2).withMargin(top = 16)
+                .apply { text = if (drill == Drill.RESULT) dot("●  " + drillText(), if (drillGood) ACTIVE else RECORDING) else drillText() }
             addView(drillStatus)
         }, ::showTutorial) {
             zones(button(if (prefs.getBoolean(TUTORIAL_SEEN, false)) "돌아가기" else "건너뛰기") { done() },
@@ -598,7 +612,7 @@ class MainActivity : Activity() {
                     driving -> recordButton(Rec.DISABLED, "연습은 정차 후에", onClick = null)
                     drill == Drill.GUIDE -> recordButton(Rec.BUSY, "먼저 들어요", onClick = null)
                     drill == Drill.COUNT -> recordButton(Rec.COUNTDOWN, "따라 부를 준비", count = drillCount) { cancelDrill(); showTutorial() }
-                    drill == Drill.SING -> recordButton(Rec.RECORDING, "그만") { recorder.stop() }
+                    drill == Drill.SING -> recordButton(Rec.RECORDING, "연습 완료") { recorder.stop() }
                     else -> recordButton(Rec.READY, if (drill == Drill.RESULT) "다시 연습" else "듣고 따라 부르기") { startDrill() }
                 }),
                 button("시작하기", Btn.SECONDARY) { done() })
@@ -806,6 +820,7 @@ class MainActivity : Activity() {
         val count = tracks?.length() ?: 0
         val idle = p == null && !finalSubmitting
         show({
+            noticeView()?.let { addView(it) }
             addView(when {
                 s == null || p != null -> steps(1, busy = true)
                 s.optJSONObject("final") != null -> steps(3, done = true)
@@ -982,7 +997,7 @@ class MainActivity : Activity() {
         }, ::showCreate, tabs = true) {
             zones(button("← 내 멜로디") { showSong(false) },
                 listOf(if (making) recordButton(Rec.BUSY, "만드는 중", onClick = null)
-                       else button("Create music", Btn.SECONDARY) { createFinal() }),
+                       else button("노래 만들기", Btn.SECONDARY) { createFinal() }),
                 s.optJSONObject("final")?.let { button("완성된 노래 →") { showPlayer(false) } })
         }
     }
@@ -1082,11 +1097,10 @@ class MainActivity : Activity() {
             })
         }
         addView(input, LinearLayout.LayoutParams(0, dp(100), 1f).apply { marginEnd = dp(16) })
-        addView(iconButton(if (listening) "■" else "🎤") { if (enabled) voicePrompt(input) }.apply {
-            contentDescription = "말로 주제 넣기"
+        addView(iconButton(if (listening) "■" else "🎤", if (listening) "말로 주제 넣기 멈추기" else "말로 주제 넣기") { if (enabled) voicePrompt(input) }.apply {
             if (listening) { background = round(RECORDING, 20); setTextColor(Color.WHITE) }
         }, LinearLayout.LayoutParams(dp(100), dp(100)).apply { marginEnd = dp(16) })
-        addView(iconButton("🎲") { if (enabled) rollTheme(input) }.apply { contentDescription = "주사위 — 아무 주제나" }, LinearLayout.LayoutParams(dp(100), dp(100)))
+        addView(iconButton("🎲", "주사위 — 아무 주제나") { if (enabled) rollTheme(input) }, LinearLayout.LayoutParams(dp(100), dp(100)))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
@@ -1181,6 +1195,7 @@ class MainActivity : Activity() {
         val title = text("$name  $value", BODY_S_STRONG, TEXT3).withMargin(top = 24, bottom = 4)
         addView(title)
         addView(SeekBar(this@MainActivity).apply {
+            contentDescription = name
             max = 100
             progress = value
             progressTintList = ColorStateList.valueOf(GRAY_600)
@@ -1398,7 +1413,7 @@ class MainActivity : Activity() {
         info.addView(text(f.getString("prompt"), BODY_S, TEXT3).apply { maxLines = 1 }.withMargin(top = 4))
         info.addView(text("${clock(f.getDouble("duration_sec").toFloat())} · 내 멜로디 + 가사 + 표지", BODY_S, TEXT3).withMargin(top = 4))
         box.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(16) })
-        box.addView(iconButton("▶") { showPlayer(autoplay = true) })
+        box.addView(iconButton("▶", "${f.getString("title")} 듣기") { showPlayer(autoplay = true) })
         return box.withMargin(bottom = 16, fill = true)
     }
 
@@ -1469,9 +1484,9 @@ class MainActivity : Activity() {
             }
             // 주행 중에는 🎤 한 번 누르고 말하면 끝 — 말이 끝나면 버튼 없이 바로 새 버전(손·눈을 쓰는 단계를 하나 줄인다).
             // 정차 중에는 받아 적은 문장을 보고 고친 뒤 "새 버전"을 누른다
-            addView(iconButton(if (listening) "■" else "🎤") {
+            addView(iconButton(if (listening) "■" else "🎤", if (listening) "말로 바꾸기 — 듣기 멈추기" else "말로 바꾸기 — 말하기") {
                 voicePrompt(input, { editText = it }, onFinal = { if (driving) submit(it) })
-            }.apply { contentDescription = "말로 바꾸기 — 말하기" },
+            },
                 LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(12) })
             addView(button("새 버전", Btn.SECONDARY, Size.MEDIUM, enabled = !finalSubmitting) { submit(editText) })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
@@ -1582,6 +1597,7 @@ class MainActivity : Activity() {
                 }
                 f.optString("edit_summary").takeIf { it.isNotEmpty() && it != "null" }?.let { col.addView(text("✦ 이번 버전: $it", BODY_S, POSITIVE).withMargin(top = 4)) }
                 seek = SeekBar(this@MainActivity).apply {
+                    contentDescription = "재생 위치"
                     max = 1000
                     progressTintList = ColorStateList.valueOf(POSITIVE)
                     thumbTintList = ColorStateList.valueOf(POSITIVE)
@@ -1787,13 +1803,13 @@ class MainActivity : Activity() {
         info.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(12) })
         box.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(24) })
         if ((t.optJSONArray("score")?.length() ?: 0) > 0)
-            box.addView(iconButton("♪") { stopPlayback(); showScore(t) }, LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(16) })
+            box.addView(iconButton("♪", "트랙 $n 음표 보기") { stopPlayback(); showScore(t) }, LinearLayout.LayoutParams(dp(80), dp(80)).apply { marginEnd = dp(16) })
         t.optString("hum_url").takeIf { it.isNotEmpty() && it != "null" }?.let { url ->
             // 전/후 들어보기: 내가 흥얼거린 원본 ↔ 음표로 바꾼 연주
             box.addView(button(if (playing == "hum$n") "■ 원본" else "원본", size = Size.MEDIUM) { toggle("hum$n", url) },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(16) })
         }
-        box.addView(iconButton(if (playing == "track$n") "■" else "▶") { toggle("track$n", t.getString("audio_url")) })
+        box.addView(iconButton(if (playing == "track$n") "■" else "▶", if (playing == "track$n") "트랙 $n 멈추기" else "트랙 $n 듣기") { toggle("track$n", t.getString("audio_url")) })
         return box.withMargin(bottom = 16, fill = true)
     }
 
@@ -2144,6 +2160,7 @@ class MainActivity : Activity() {
         }
         if (n == 0) {
             // 시작음이 끝난 뒤 녹음을 연다 — 효과음이 녹음에 섞이지 않게
+            showCountdown(0)
             beep(true)
             ui.postDelayed({ if (token == countdownToken) { counting = false; record() } }, BEEP_GAP_MS)
             return
@@ -2164,6 +2181,7 @@ class MainActivity : Activity() {
         countdownToken++
         counting = false
         releaseFocus()
+        notice = CANCELLED
         showHome()
     }
 
@@ -2318,6 +2336,8 @@ class MainActivity : Activity() {
         val capture = if (music && android.os.Build.VERSION.SDK_INT >= 29) projection else null
         musicCapturing = music  // showRecording 의 안내 문구가 음악용인지 본다
         showRecording(music, direct = capture != null)
+        // 소리 안내(3·2·1 · 띠링)에 더해 눈으로도 녹음 중임을 바로 알게 — 화면 맨 위에 겹친다(터치는 통과)
+        glow = EdgeGlow(this).also { root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
         recording = true
         cancelled = false
         if (music) Log.i(tag, "음악 녹음 시작: ${if (capture != null) "재생 소리 직접" else "차량 마이크"}, 포커스 요청 없음")
@@ -2354,6 +2374,7 @@ class MainActivity : Activity() {
                             else -> hearingState
                         })
                         // -60dB(조용) ~ -10dB(큼) 을 0~100% 로. 커질 땐 바로, 작아질 땐 천천히.
+                        glow?.level(((db + 60) / 50).toFloat())
                         halo?.let {
                             val target = HALO_MIN + (1 - HALO_MIN) * ((db + 60) / 50).coerceIn(0.0, 1.0).toFloat()
                             val k = it.scaleX + (target - it.scaleX) * (if (target > it.scaleX) 0.7f else 0.25f)
@@ -2373,6 +2394,9 @@ class MainActivity : Activity() {
             ui.post {
                 recording = false
                 musicCapturing = false
+                // 녹음이 끝난 순간 글로우를 걷는다 — 빛이 남아 있으면 아직 녹음 중인 줄 안다
+                glow?.let { root.removeView(it) }
+                glow = null
                 releaseFocus()
                 if (music) holdCapture()
                 when {
@@ -2380,6 +2404,7 @@ class MainActivity : Activity() {
                     interrupted -> { interrupted = false; cancelled = false; if (active) showError(FOCUS_LOST) }
                     cancelled -> if (active) {
                         cancelled = false
+                        notice = CANCELLED
                         if (song != null) { stackMode = null; showSong(false) } else showHome()
                     }
                     sec < 0 -> showError(if (music) "음악을 녹음하지 못했어요." else "마이크를 열지 못했어요.")
@@ -2647,6 +2672,11 @@ class MainActivity : Activity() {
         typeface = faces.getOrPut(type.font) { resources.getFont(type.font) }
     }
 
+    /** 문장 맨 앞 ● 점만 색을 입힌다(색만으로 뜻을 전하지 않고, 글자는 대비 높은 색으로 둔다). */
+    private fun dot(s: String, color: Int): CharSequence = SpannableString(s).apply {
+        if (s.startsWith("●")) setSpan(ForegroundColorSpan(color), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
     private fun headline(s: String) = text(s, HEADLINE, TEXT).withMargin(bottom = 8)
     private fun title(s: String) = text(s, TITLE, TEXT).withMargin(bottom = 8)
     private fun body(s: String) = text(s, BODY, TEXT2).withMargin(bottom = 4)
@@ -2673,9 +2703,10 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
-    /** Pleos Icon button(Basic · Medium 80×80). 아이콘 자산 대신 글리프를 쓴다. */
-    private fun iconButton(glyph: String, onClick: () -> Unit) = text(glyph, TITLE, TEXT).apply {
+    /** Pleos Icon button(Basic · Medium 80×80). 아이콘 자산 대신 글리프를 쓴다. desc = 화면 낭독 이름(글리프는 읽어 줄 말이 없다). */
+    private fun iconButton(glyph: String, desc: String, onClick: () -> Unit) = text(glyph, TITLE, TEXT).apply {
         gravity = Gravity.CENTER
+        contentDescription = desc
         width = dp(80)
         height = dp(80)
         background = pressable(round(TINT, 20), round(TINT_PRESSED, 20))
@@ -2706,6 +2737,8 @@ class MainActivity : Activity() {
 
     /** 녹음 레벨에 따라 커지는 원(녹음 중 버튼 뒤). 화면이 바뀌면 null. */
     private var halo: View? = null
+    /** 녹음 중 화면 가장자리 글로우. 화면이 바뀌면(root 를 비우면) null. */
+    private var glow: EdgeGlow? = null
 
     /**
      * 녹음 전용 버튼(프로젝트 컴포넌트): 지름 200 원형, 가운데 아이콘이 상태를 보여 준다.
@@ -2748,7 +2781,7 @@ class MainActivity : Activity() {
             if (onClick != null) setOnClickListener { onClick() } else isClickable = false
         }
         val (icon, size) = when (state) {
-            Rec.COUNTDOWN -> text("$count", COUNT, Color.WHITE) to ViewGroup.LayoutParams.WRAP_CONTENT
+            Rec.COUNTDOWN -> text(if (count == 0) "♪" else "$count", COUNT, Color.WHITE) to ViewGroup.LayoutParams.WRAP_CONTENT
             Rec.BUSY -> ProgressBar(this).apply { isIndeterminate = true; indeterminateTintList = ColorStateList.valueOf(TEXT) } to dp(RECORD * 2 / 5)
             else -> ImageView(this).apply {
                 setImageResource(when (state) { Rec.RECORDING -> R.drawable.ic_stop; Rec.DISABLED -> R.drawable.ic_mic_off; else -> R.drawable.ic_mic })
@@ -2896,6 +2929,7 @@ class MainActivity : Activity() {
         val STEPS = listOf("흥얼거리기", "내 멜로디", "노래 만들기", "완성")
         const val INPUT_MENU_W = 560
         const val FOCUS_DENIED = "지금은 녹음할 수 없어요. 통화나 안내가 끝난 뒤 다시 흥얼거려 주세요."
+        const val CANCELLED = "녹음을 취소했어요. 방금 녹음은 저장하지 않았어요."
         const val FOCUS_LOST = "통화나 안내가 끼어들어 녹음을 멈췄어요. 끝난 뒤 다시 흥얼거려 주세요."
         const val REQ_CAPTURE = 6
         const val CAPTURE_IDLE_MS = 10 * 60 * 1000L
@@ -2929,8 +2963,8 @@ class MainActivity : Activity() {
         const val TAB_H = 120
         const val MUSIC_COVER = 240
         const val OPTION_W = 640
-        /** 시작음(0.25초 + 꼬리)이 다 끝난 뒤 녹음을 여는 간격. */
-        const val BEEP_GAP_MS = 450L
+        /** 시작음 '띠링'(0.3초)이 끝나자마자 녹음을 여는 간격 — 효과음은 섞이지 않게, 첫 음은 놓치지 않게. */
+        const val BEEP_GAP_MS = 350L
         /** 따라 부르기 연습 막대 그림 높이. */
         const val DRILL_ROLL = 420
         /** 따라 부르기 연습 멜로디(직접 지은 8음, 템포 96 · 도~솔 음역). 마지막 음은 두 박. */
