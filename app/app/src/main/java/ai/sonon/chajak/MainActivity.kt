@@ -338,6 +338,7 @@ class MainActivity : Activity() {
         onHome = false
         onList = false
         onDeviceCheck = false
+        onSettings = false
         root.removeAllViews()
         val page = column()
         val col = column().apply {
@@ -384,27 +385,35 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ 왼쪽 탭
 
-    enum class Tab(val label: String, val glyph: String) { STUDIO("녹음실", "●"), MUSIC("내 노래", "♫"), MELODIES("내 멜로디", "♪") }
+    enum class Tab(val label: String, val glyph: String) { STUDIO("녹음실", "●"), MUSIC("내 노래", "♫"), MELODIES("내 멜로디", "♪"), SETTINGS("설정", "⚙") }
 
     private var tab = Tab.STUDIO
     /** 목록 탭이 떠 있으면 목록을 새로 받았을 때 다시 그린다. */
     private var onList = false
 
-    private fun tabRail() = column().apply {
+    /**
+     * 왼쪽 탭. 주 탭 세 칸(녹음실·내 노래·내 멜로디)은 화면 세로 가운데(2026-11-08 사용자 요청), 설정은 맨 아래에 따로
+     * (2026-11-09 사용자: "설정 탭을 넣어야 할 것 같아" — 녹음 장치·서버 주소 등이 녹음 장치 화면 맨 아래에 숨어 있었다).
+     */
+    private fun tabRail() = FrameLayout(this).apply {
         setBackgroundColor(SURFACE)
-        gravity = Gravity.CENTER_VERTICAL  // 탭 세 칸을 화면 세로 가운데에 모은다(2026-11-08 사용자 요청)
         setPadding(dp(16), dp(PAGE_V), dp(16), dp(PAGE_V))
-        Tab.values().forEach { t ->
+        fun cell(t: Tab) = column().apply {
             val on = t == tab
-            addView(column().apply {
-                gravity = Gravity.CENTER
-                background = if (on) round(TINT_PRESSED, 20) else pressable(round(SURFACE, 20), round(TINT, 20))
-                contentDescription = t.label
-                setOnClickListener { openTab(t) }
-                addView(text(t.glyph, TITLE, if (on) RECORDING.takeIf { t == Tab.STUDIO } ?: TEXT else TEXT3).apply { gravity = Gravity.CENTER })
-                addView(text(t.label, if (on) BODY_S_STRONG else BODY_S, if (on) TEXT else TEXT2).apply { gravity = Gravity.CENTER }.withMargin(top = 4))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_H)).apply { if (t != Tab.values().last()) bottomMargin = dp(TAB_GAP) })
+            gravity = Gravity.CENTER
+            background = if (on) round(TINT_PRESSED, 20) else pressable(round(SURFACE, 20), round(TINT, 20))
+            contentDescription = t.label
+            setOnClickListener { openTab(t) }
+            addView(text(t.glyph, TITLE, if (on) RECORDING.takeIf { t == Tab.STUDIO } ?: TEXT else TEXT3).apply { gravity = Gravity.CENTER })
+            addView(text(t.label, if (on) BODY_S_STRONG else BODY_S, if (on) TEXT else TEXT2).apply { gravity = Gravity.CENTER }.withMargin(top = 4))
         }
+        val main = listOf(Tab.STUDIO, Tab.MUSIC, Tab.MELODIES)
+        addView(column().apply {
+            main.forEach { t ->
+                addView(cell(t), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_H)).apply { if (t != main.last()) bottomMargin = dp(TAB_GAP) })
+            }
+        }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_VERTICAL))
+        addView(cell(Tab.SETTINGS), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(SETTINGS_TAB_H), Gravity.BOTTOM))
     }
 
     private fun openTab(t: Tab) {
@@ -413,6 +422,94 @@ class MainActivity : Activity() {
             Tab.STUDIO -> { stackMode = null; showHome() }
             Tab.MUSIC -> { loadLibrary(); showMusicList() }
             Tab.MELODIES -> { loadLibrary(); showMelodyList() }
+            Tab.SETTINGS -> showSettings()
+        }
+    }
+
+    // ------------------------------------------------------------------ 설정 탭
+
+    private var onSettings = false
+    /** 내 음역대 지우기는 두 번 눌러야 한다(되돌릴 수 없다). */
+    private var rangeResetArmed = false
+
+    /**
+     * 탭 4 · 설정(2026-11-09). 흩어져 있던 것을 한곳에: 녹음 장치 · 음악 담는 방법 · 내 음역대 · 서버 연결 ·
+     * 녹음한 소리가 쓰이는 곳 · 도움말 · 앱 정보. 글자 입력(서버 주소)과 지우기는 정차 중에만.
+     */
+    private fun showSettings() {
+        tab = Tab.SETTINGS
+        show({
+            onSettings = true
+            addView(headline("설정"))
+            addView(body("녹음 장치와 서버, 안내를 여기서 바꿔요. 글자 입력과 지우기는 정차 중에만 할 수 있어요."))
+
+            addView(label("녹음"))
+            addView(column().apply {
+                background = round(SURFACE, 24)
+                setPadding(dp(28), dp(20), dp(28), dp(24))
+                addView(LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(column().apply {
+                        addView(text("녹음 장치", BODY_STRONG, TEXT))
+                        addView(text(inputDevice?.let(InputDevices::label) ?: DEFAULT_INPUT, BODY, TEXT2).withMargin(top = 4))
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(button("🔍  녹음 장치 확인", size = Size.MEDIUM) { showDeviceCheck() })
+                })
+                addView(text("음악에서 따기 — 담는 방법", BODY_STRONG, TEXT).withMargin(top = 24, bottom = 8))
+                val modes = listOf("auto", "direct", "mic")
+                addView(segmented(listOf("자동", "재생 소리 직접", "마이크로"), modes.indexOf(prefs.getString(MUSIC_SOURCE, "auto")).coerceAtLeast(0)) { i ->
+                    prefs.edit().putString(MUSIC_SOURCE, modes[i]).apply(); showSettings()
+                })
+                addView(text("지금 누르면: " + (if (musicNeedsCapture()) "재생 소리를 직접 담아요" else "마이크로 담아요"), BODY_S, TEXT3).withMargin(top = 10))
+            }.withMargin(fill = true))
+
+            addView(label("내 음역대"))
+            addView(column().apply {
+                background = round(SURFACE, 24)
+                setPadding(dp(28), dp(20), dp(28), dp(24))
+                val v = voiceRange
+                addView(text(if (v.enough) "${VoiceRange.name(v.low!!)}–${VoiceRange.name(v.high!!)} · 허밍 ${prefs.getInt("voice_takes", 0)}번으로 잼"
+                             else "아직 몰라요 — 흥얼거리면 쌓여요", BODY, TEXT))
+                addView(text("다른 사람이 운전하거나 처음부터 다시 재고 싶으면 지우세요. 노래 목소리 '자동'이 이 값을 따라요.", BODY_S, TEXT3).withMargin(top = 6))
+                addView(button(if (rangeResetArmed) "한 번 더 누르면 지워요" else "음역대 지우기", if (rangeResetArmed) Btn.SECONDARY else Btn.PRIMARY,
+                               Size.MEDIUM, enabled = v.enough && !driving) {
+                    if (!rangeResetArmed) { rangeResetArmed = true; showSettings(); return@button }
+                    rangeResetArmed = false
+                    prefs.edit().remove("voice_range").remove("voice_takes").apply()
+                    showSettings()
+                }.withMargin(top = 16))
+            }.withMargin(fill = true))
+
+            addView(label("서버 연결"))
+            addView(serverCard().withMargin(fill = true))
+
+            addView(label("녹음한 소리"))
+            addView(voiceFacts(music = false).withMargin(fill = true))
+
+            addView(label("도움말"))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(button("흥얼거리기 요령", size = Size.MEDIUM) { showTutorial() })
+            })
+
+            addView(label("앱 정보"))
+            addView(text("차작 ${BuildConfig.VERSION_NAME} · 서버 ${api.base}", BODY, TEXT2))
+            addView(caption("노래는 내 흥얼거림과 오픈 모델(로컬 서버)로 만들어요.", TEXT3))
+        }, ::showSettings, tabs = true)
+    }
+
+    /** 녹음한 소리가 어디로 가서 무엇에 쓰이는지 — 첫 녹음 안내와 설정에서 같은 문장. 사실만(곡 지우기는 아직 없다). */
+    private fun voiceFacts(music: Boolean) = column().apply {
+        background = round(SURFACE, 24)
+        setPadding(dp(32), dp(24), dp(32), dp(28))
+        listOf(
+            "보내는 곳" to "녹음한 ${if (music) "음악" else "흥얼거림"}은 노래를 만드는 차작 서버로 보내 음표로 바꿔요.",
+            "남는 것" to "만든 곡과 녹음은 '내 노래'·'내 멜로디'에 남아 다시 듣고 이어서 만들 수 있어요.",
+            "쓰지 않는 곳" to "AI 학습에 쓰지 않고, 다른 사람에게 공유하지 않아요.",
+        ).forEachIndexed { i, (k, v) ->
+            addView(text(k, BODY_STRONG, TEXT).withMargin(top = if (i == 0) 0 else 16))
+            addView(text(v, BODY, TEXT2).withMargin(top = 4))
         }
     }
 
@@ -542,6 +639,7 @@ class MainActivity : Activity() {
      * 정차 중 최근 멜로디가 노래 없이 남아 있으면 "아까 멜로디로 노래 만들까요?" 카드(정차하면 이어서).
      */
     private fun showHome() {
+        tab = Tab.STUDIO
         val stacking = stackMode != null && song != null
         show({
             onHome = true
@@ -698,14 +796,15 @@ class MainActivity : Activity() {
         (if (DeviceCheck.emulator) " (에뮬레이터: PC 에 실제 마이크가 연결돼 있고 Windows 기본 녹음 장치로 잡혀 있는지 확인해 주세요.)" else "")
 
     /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주·트랙 빼기 오류면 곡으로 돌아간다. */
-    private fun showError(message: String, deviceHelp: Boolean = false) {
+    private fun showError(message: String, deviceHelp: Boolean = false, settingsHelp: Boolean = false) {
         val retry = song == null || stackMode != null
         show({
             addView(headline("다시 한 번 해 볼까요?"))
             // 다시 녹음할 수 있는 오류는 이유를 녹음 버튼 바로 위에(2026-11-09 사용자) — 여기서는 제목만
             if (!retry) addView(text(message, BODY, TEXT))
-        }, { showError(message, deviceHelp) }) {
+        }, { showError(message, deviceHelp, settingsHelp) }) {
             val back = when {
+                settingsHelp -> button("⚙  설정") { showSettings() }
                 deviceHelp -> button("🔍  녹음 장치 확인") { showDeviceCheck() }
                 song != null -> button("곡으로 돌아가기") { stackMode = null; showSong(false) }
                 else -> null
@@ -2252,19 +2351,8 @@ class MainActivity : Activity() {
         show({
             addView(steps(0))
             addView(headline("녹음한 소리는 노래를 만드는 데만 써요"))
-            addView(column().apply {
-                background = round(SURFACE, 24)
-                setPadding(dp(32), dp(24), dp(32), dp(28))
-                listOf(
-                    "보내는 곳" to "녹음한 ${if (music) "음악" else "흥얼거림"}은 노래를 만드는 차작 서버로 보내 음표로 바꿔요.",
-                    "남는 것" to "만든 곡과 녹음은 '내 노래'·'내 멜로디'에 남아 다시 듣고 이어서 만들 수 있어요.",
-                    "쓰지 않는 곳" to "AI 학습에 쓰지 않고, 다른 사람에게 공유하지 않아요.",
-                ).forEachIndexed { i, (k, v) ->
-                    addView(text(k, BODY_STRONG, TEXT).withMargin(top = if (i == 0) 0 else 16))
-                    addView(text(v, BODY, TEXT2).withMargin(top = 4))
-                }
-            }.withMargin(top = 24, fill = true))
-            addView(caption("이 안내는 처음 한 번만 보여요.", TEXT3).withMargin(top = 16))
+            addView(voiceFacts(music).withMargin(top = 24, fill = true))
+            addView(caption("이 안내는 처음 한 번만 보여요. 설정 탭에서 다시 볼 수 있어요.", TEXT3).withMargin(top = 16))
         }, { showVoiceNotice(music) }, tabs = true) {
             zones(button("취소") { showHome() },
                 listOf(recordButton(Rec.READY, "확인하고 녹음") { go() }))
@@ -2586,11 +2674,9 @@ class MainActivity : Activity() {
                 })
                 addView(text("지금 누르면: " + (if (musicNeedsCapture()) "재생 소리를 직접 담아요" else "마이크로 담아요"), BODY_S_STRONG, POSITIVE).withMargin(top = 12))
             }.withMargin(fill = true))
-
-            addView(label("서버 연결"))
-            addView(serverCard().withMargin(fill = true))
         }, ::showDeviceCheck, tabs = true) {
-            zones(button("← 녹음실") { showHome() }, listOf(), button("다시 확인") { probeResults.clear(); showDeviceCheck() })
+            zones(if (tab == Tab.SETTINGS) button("← 설정") { showSettings() } else button("← 녹음실") { showHome() },
+                  listOf(), button("다시 확인") { probeResults.clear(); showDeviceCheck() })
         }
         probeMeters = meters
     }
@@ -2633,7 +2719,7 @@ class MainActivity : Activity() {
     private fun connectServer(raw: String, save: Boolean = true) {
         val url = raw.trim().trimEnd('/').let { if (it.startsWith("http://") || it.startsWith("https://")) it else "http://$it" }
         serverStatus = "확인하는 중… $url"
-        showDeviceCheck()
+        showSettings()
         io.execute {
             val ok = try {
                 val c = java.net.URL("$url/health").openConnection() as java.net.HttpURLConnection
@@ -2648,7 +2734,7 @@ class MainActivity : Activity() {
                     serverStatus = "●  연결됐어요 — 이제 이 서버로 노래를 만들어요"
                     loadLibrary()
                 } else serverStatus = "연결하지 못했어요: $url — 주소와 서버 PC 가 켜져 있는지 확인해 주세요"
-                if (onDeviceCheck) showDeviceCheck()
+                if (onSettings) showSettings()
             }
         }
     }
@@ -2834,7 +2920,7 @@ class MainActivity : Activity() {
                 ui.post { endPending(); showError(e.message ?: "오류가 났어요.") }
             } catch (e: Exception) {
                 Log.e(tag, "요청 실패", e)
-                ui.post { endPending(); showError("서버와 연결이 끊겼어요(${api.base}). 잠시 후 다시 시도하거나, 녹음 장치 확인 화면 맨 아래 '서버 연결'에서 주소를 확인해 주세요.", deviceHelp = true) }
+                ui.post { endPending(); showError("서버와 연결이 끊겼어요(${api.base}). 잠시 후 다시 시도하거나, 설정 탭의 '서버 연결'에서 주소를 확인해 주세요.", settingsHelp = true) }
             }
         }
     }
@@ -3369,6 +3455,8 @@ class MainActivity : Activity() {
         const val TAB_W = 232
         const val TAB_H = 168
         const val TAB_GAP = 32
+        /** 맨 아래 설정 탭 높이(주 탭보다 낮게 — 자주 누르지 않는다). */
+        const val SETTINGS_TAB_H = 128
         const val MUSIC_COVER = 240
         const val OPTION_W = 640
         /** 시작음 '띠링'(0.3초)이 끝나자마자 녹음을 여는 간격 — 효과음은 섞이지 않게, 첫 음은 놓치지 않게. */
