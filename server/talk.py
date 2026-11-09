@@ -10,6 +10,7 @@ import asyncio
 import io
 import json
 import os
+import re
 import threading
 
 import aiohttp
@@ -79,6 +80,7 @@ def _digest_prompt(transcript: str, feeling: str) -> str:
         f"방향: {feeling} — {FEELINGS[feeling]}.\n"
         "규칙:\n"
         "- 대화에 없는 사건을 지어내지 않는다.\n"
+        "- 받아쓰기가 잘못 알아들은 것 같은 낱말(문맥에 안 맞는 낱말)은 문맥에 맞는 말로 바로잡아 쓴다.\n"
         "- 사람 이름·회사·학교·가게 이름·전화번호·주소는 '그 사람', '팀장님', '회사'처럼 바꾼다.\n"
         "- 욕설은 순화하되 감정의 세기는 줄이지 않는다.\n"
         "- 위로·교훈·'힘내자' 같은 긍정적인 결말을 덧붙이지 않는다.\n"
@@ -88,9 +90,23 @@ def _digest_prompt(transcript: str, feeling: str) -> str:
         '"story": 무슨 일이 있었는지 2~3문장, '
         '"feeling": 이 노래의 감정 낱말 1~2개, '
         '"phrases": 대화에서 실제로 나온 말 중 가사에 살리면 좋을 짧은 표현 3~5개(배열, 고유한 정보는 바꿔서), '
-        '"title": 노래 제목 후보(짧게)}\n'
+        '"title": 노래 제목 후보(짧게), '
+        '"names": 대화에 나온 사람 이름·회사·가게 이름을 받아쓴 그대로(배열, 없으면 [])}\n'
         f"대화:\n{transcript[:6000]}"
     )
+
+
+# 이름 가리기는 LLM 에만 맡기지 않는다(2026-11-10: 같은 대화에서 한 번은 가리고 한 번은 '김 팀장님'을 그대로 썼다).
+# ① 성(+이름) + 직함 → 직함만  ② LLM 이 찾아 준 이름 → '그 사람'
+TITLES = "팀장|부장|과장|차장|대리|사장|실장|본부장|이사|상무|전무|주임|선배|후배|선생|교수|원장|반장|매니저|대표"
+_TITLE_NAME = re.compile(rf"(?<![가-힣])[가-힣]{{1,3}}\s?(?=(?:{TITLES})(?:님)?(?![가-힣]{{2}}))")
+_KEEP_BEFORE = {"우리", "그", "새", "옆", "윗", "전", "다른", "저", "이"}
+
+
+def _mask(text: str, names: list[str]) -> str:
+    for n in sorted({n for n in names if len(n) >= 2}, key=len, reverse=True):
+        text = text.replace(n, "그 사람")
+    return _TITLE_NAME.sub(lambda m: m.group(0) if m.group(0).strip() in _KEEP_BEFORE else "", text)
 
 
 def _words(v) -> str:
@@ -101,13 +117,15 @@ def _words(v) -> str:
 
 
 def _clean(out: dict, feeling: str) -> dict:
-    phrases = [str(p).strip() for p in (out.get("phrases") or []) if str(p).strip()][:5]
+    names = [str(n).strip() for n in (out.get("names") or []) if isinstance(n, (str, int)) and str(n).strip()]
+    m = lambda s: _mask(str(s or "").strip(), names)
+    phrases = [m(p) for p in (out.get("phrases") or []) if str(p).strip()][:5]
     return {"enough": out.get("enough") is not False,
-            "theme": str(out.get("theme", "")).strip()[:80],
-            "story": str(out.get("story", "")).strip()[:400],
+            "theme": m(out.get("theme"))[:80],
+            "story": m(out.get("story"))[:400],
             "feeling": _words(out.get("feeling"))[:30],
             "phrases": [p[:40] for p in phrases],
-            "title": str(out.get("title", "")).strip()[:30],
+            "title": m(out.get("title"))[:30],
             "direction": feeling}
 
 
