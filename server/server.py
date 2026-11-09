@@ -721,19 +721,19 @@ async def final_cover(request):
 
 
 async def talk_upload(request):
-    """대화로 가사 만들기(저니맵 02): multipart audio(차 안 대화, 10분까지) + direction(그대로·통쾌하게·담담하게·유쾌하게).
+    """대화로 가사 만들기(저니맵 02): multipart audio(차 안 대화, 30분까지 · wav·m4a·mp3) + direction(그대로·통쾌하게·담담하게·유쾌하게).
     → 받아쓰기 + 노래 이야기 정리 {transcript, lines, seconds, enough, theme, story, feeling, phrases, title, direction}.
     녹음 파일은 저장하지 않는다(받아쓰고 나면 버린다)."""
     data, filename, fields = await _form(request)
     direction = fields.get("direction") or "그대로"
     if direction not in T.FEELINGS:
         raise ApiError(400, "BAD_OPTION", f"direction 값은 {list(T.FEELINGS)} 중 하나여야 해요.")
-    try:
-        info = sf.info(io.BytesIO(data))
+    try:  # wav·m4a·mp3 모두(PyAV). 15분 대화 푸는 데 약 0.5초
+        seconds = len(await asyncio.get_running_loop().run_in_executor(None, T.decode, data)) / 16000
     except Exception:
         raise ApiError(400, "BAD_AUDIO", "녹음 파일을 읽지 못했어요. 다시 녹음해 주세요.")
-    if info.duration > T.MAX_TALK_SEC:
-        raise ApiError(413, "TOO_LONG", "대화 녹음은 10분까지예요.")
+    if seconds > T.MAX_TALK_SEC:
+        raise ApiError(413, "TOO_LONG", f"대화 녹음은 {T.MAX_TALK_SEC // 60}분까지예요.")
     t0 = time.perf_counter()
     try:
         heard = await T.transcribe(data)
@@ -745,7 +745,10 @@ async def talk_upload(request):
     if len(heard["text"].replace(" ", "")) < 8:
         raise ApiError(422, "TALK_EMPTY", "말소리가 거의 들리지 않았어요. 마이크 가까이에서 다시 이야기해 주세요.")
     t1 = time.perf_counter()
-    story = await T.digest(heard["text"], direction)
+    try:
+        story = await T.digest(heard["text"], direction, lines=heard["lines"])
+    except T.DigestError as e:
+        raise ApiError(502, "TALK_DIGEST_FAILED", f"{e} 잠시 후 다시 시도해 주세요.")
     return web.json_response({"transcript": heard["text"], "lines": heard["lines"], "seconds": heard["seconds"], **story,
                               "timing": {"stt_sec": round(t1 - t0, 1), "digest_sec": round(time.perf_counter() - t1, 1), "stt_device": heard["device"]}},
                              dumps=lambda o: json.dumps(o, ensure_ascii=False))
