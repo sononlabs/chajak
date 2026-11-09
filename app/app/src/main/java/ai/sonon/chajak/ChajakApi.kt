@@ -63,8 +63,18 @@ class ChajakApi(val base: String) {
         }
     }
 
-    /** 대화로 가사 만들기: 차 안 대화 녹음 → 받아쓰기 + 노래 이야기 정리. 받아쓰기가 오래 걸릴 수 있어 5분까지 기다린다. */
-    fun talk(file: File, direction: String): JSONObject = multipart("/v1/talk", file, mapOf("direction" to direction), 300_000)
+    /** 대화 분석 작업 시작(녹음 올리기) → {id}. 진행·결과는 talkStatus. 30분 녹음(약 7MB)도 올리게 3분까지 기다린다. */
+    fun talkStart(file: File, direction: String): JSONObject = multipart("/v1/talk", file, mapOf("direction" to direction), 180_000)
+
+    /** 대화 분석 진행: {status: running|done|error, stage, seconds, eta_sec, result?, error?}. */
+    fun talkStatus(id: String): JSONObject = request("GET", "/v1/talk/$id", null, 15_000)
+
+    /** 보관한 대화를 다른 방향으로 다시 정리(받아쓰기 없이 약 10초). */
+    fun talkDigest(lines: org.json.JSONArray, direction: String): JSONObject =
+        request("POST", "/v1/talk/digest", JSONObject().put("lines", lines).put("direction", direction))
+
+    /** 곡 구성 미리보기: 가사 들어갈 구간과 줄마다 글자 수 목표. */
+    fun songForm(songId: String, seconds: Int): JSONObject = request("GET", "/v1/songs/$songId/form?seconds=$seconds", null, 60_000)
 
     private fun multipart(path: String, file: File, fields: Map<String, String>, readTimeoutMs: Int = 120_000): JSONObject {
         val boundary = "chajak" + System.nanoTime()
