@@ -103,8 +103,43 @@ def _sample(lines: list[str], limit: int = 6000) -> str:
     return "\n".join(keep)
 
 
+async def _run_worker(src: str, out: str, device: str) -> int:
+    import sys
+    env = {**os.environ, "CHAJAK_STT_DEVICE": device}
+    proc = await asyncio.create_subprocess_exec(sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "talk_worker.py"),
+                                                src, out, env=env, cwd=os.path.dirname(os.path.abspath(__file__)),
+                                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=1800)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return -1
+    if proc.returncode:
+        print(f"받아쓰기 프로세스 실패({device}, 코드 {proc.returncode}):", (err or b"").decode("utf-8", "ignore")[-400:])
+    return proc.returncode
+
+
 async def transcribe(data: bytes) -> dict:
-    return await asyncio.get_running_loop().run_in_executor(None, _transcribe_sync, data)
+    """받아쓰기는 따로 도는 프로세스에서(엔진이 비정상 종료해도 서버는 산다). GPU 에서 실패하면 CPU 로 한 번 더.
+    녹음은 잠깐 임시 파일로 두었다가 곧바로 지운다."""
+    import tempfile
+    fd, src = tempfile.mkstemp(suffix=".audio")
+    out = src + ".json"
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        first = STT_DEVICE if STT_DEVICE in ("cpu", "cuda") else _device()[0]
+        for device in ([first, "cpu"] if first != "cpu" else ["cpu"]):
+            if await _run_worker(src, out, device) == 0 and os.path.exists(out):
+                with open(out, encoding="utf-8") as f:
+                    return json.load(f)
+        raise RuntimeError("받아쓰기 엔진이 실패했어요(GPU·CPU 모두).")
+    finally:
+        for p in (src, out):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def _digest_prompt(transcript: str, feeling: str) -> str:
