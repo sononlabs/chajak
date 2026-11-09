@@ -55,7 +55,9 @@ object DeviceCheck {
     fun usable(d: AudioDeviceInfo) = d.type in InputDevices.USABLE
 
     /** 지금 재생 중인 소리(다른 앱 포함, 앱 이름은 시스템이 알려 주지 않는다). */
-    fun playing(audio: AudioManager): List<String> = audio.activePlaybackConfigurations.map { c ->
+    fun playing(audio: AudioManager): List<String> = playingRaw(audio).ifEmpty { if (audio.isMusicActive) listOf("음악(블루투스 등)") else emptyList() }
+
+    private fun playingRaw(audio: AudioManager): List<String> = audio.activePlaybackConfigurations.map { c ->
         val a = c.audioAttributes
         when (a.usage) {
             AudioAttributes.USAGE_MEDIA -> "음악·미디어"

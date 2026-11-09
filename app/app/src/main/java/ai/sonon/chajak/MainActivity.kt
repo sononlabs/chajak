@@ -3453,7 +3453,8 @@ class MainActivity : Activity() {
     private fun musicNeedsCapture(): Boolean = when (prefs.getString(MUSIC_SOURCE, "auto")) {
         "direct" -> true
         "mic" -> false
-        else -> DeviceCheck.capturablePlaying(audio)
+        // 가상 폰 블루투스 음악(두아 리파)이 나오는데 '자동'이 마이크를 골랐다(2026-11-10) — 음악 스트림이 켜져 있으면 차 안 재생으로 본다
+        else -> DeviceCheck.capturablePlaying(audio) || audio.isMusicActive
     }
 
     private var onDeviceCheck = false
@@ -3685,7 +3686,8 @@ class MainActivity : Activity() {
                         val left = total - (nowMs - started) / 1000
                         val el = (nowMs - started) / 1000
                         remain.text = if (left <= 10) "${left}초 뒤 멈춰요" else "%02d:%02d".format(el / 60, el % 60)
-                        wave?.push(db, if (voiced) pitchColor else TEXT3)
+                        // 음높이가 잡힌 순간만 색으로(허밍은 음 높이 색, 음악은 원과 같은 파랑 — 빨강은 녹음 버튼 색과 헷갈렸다)
+                        wave?.push(db, if (voiced) (if (music) POSITIVE else pitchColor) else TEXT3)
                     }
                 }
             } catch (e: Exception) {
