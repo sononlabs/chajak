@@ -182,6 +182,39 @@ class MainActivity : Activity() {
                     else -> Gleo.respond(this, action, "fail", "No recording is in progress.")
                 }
             }
+            Gleo.TALK_START -> when {
+                recording || counting || TalkRecordService.recording -> Gleo.respond(this, action, "fail", "A recording is already in progress.")
+                driving -> Gleo.respond(this, action, "fail", "Conversation recording can start only while the car is stopped, because everyone in the car should be told first.")
+                else -> {
+                    talkPickFor = null
+                    showTalkIntro()
+                    Gleo.respond(this, action, "success", "Please let everyone in the car know you are recording, then press start on the screen. It can record up to thirty minutes.")
+                }
+            }
+            Gleo.TALK_FINISH -> {
+                val cancel = p.optString("result") == "cancel"
+                if (!TalkRecordService.recording) Gleo.respond(this, action, "fail", "No conversation recording is in progress.")
+                else {
+                    talkCancelled = cancel
+                    TalkRecordService.stop(this)
+                    Gleo.respond(this, action, "success", if (cancel) "The conversation recording was cancelled and not saved." else "Recording finished. Writing it down and turning it into a song story now.")
+                }
+            }
+            Gleo.PLAY -> {
+                val latest = library.filter { !it.isNull("title") }.maxByOrNull { it.optString("created") }
+                when {
+                    recording || counting || TalkRecordService.recording -> Gleo.respond(this, action, "fail", "Please finish the recording first.")
+                    latest == null -> Gleo.respond(this, action, "fail", "There is no finished song yet. Hum a melody and make a song first.")
+                    else -> {
+                        playLatest(latest.getString("id"))
+                        Gleo.respond(this, action, "success", "Playing your latest song, ${latest.optString("title")}.")
+                    }
+                }
+            }
+            Gleo.STOP -> {
+                if (playing == null) Gleo.respond(this, action, "fail", "Nothing is playing.")
+                else { stopPlayback(); refresh(); Gleo.respond(this, action, "success", "Stopped the song.", "silent") }
+            }
             Gleo.ARRANGE -> {
                 val req = p.optString("request").trim()
                 val f = song?.optJSONObject("final")
@@ -196,6 +229,19 @@ class MainActivity : Activity() {
                         Gleo.respond(this, action, "success", "Making a new version with that arrangement, keeping the melody, lyrics and cover. It takes about three minutes.")
                     }
                 }
+            }
+        }
+    }
+
+    /** 가장 최근 노래를 열어 바로 듣기(Gleo "내 노래 틀어 줘"). */
+    private fun playLatest(songId: String) {
+        stopPlayback()
+        io.execute {
+            try {
+                val s = api.song(songId)
+                ui.post { song = s; stackMode = null; playerVersion = null; showPlayer(autoplay = true) }
+            } catch (e: Exception) {
+                ui.post { showError(e.message ?: "노래를 열지 못했어요.") }
             }
         }
     }
@@ -399,6 +445,7 @@ class MainActivity : Activity() {
                 }) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         })
+        if (listening) root.addView(voiceOverlay(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     /** 지금 듣는 완성 노래(미니 플레이어용): 곡 id · 버전 id · 제목 · 표지 주소. */
@@ -1452,37 +1499,57 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 녹음 중 화면: 소리 크기 막대 + "12:34 / 30:00" + 남은 시간. 마지막 1분은 빨갛게. */
+    /**
+     * 녹음 중 화면: 가운데 목소리에 반응하는 원(2026-11-10 사용자: 음성 인식 표시를 화면 가운데에) + 소리 막대,
+     * 아래 줄 위에 남은 시간(마지막 1분은 빨갛게), 오른쪽에 "12:34 / 30:00".
+     */
+    private var talkOrb: VoiceOrb? = null
+
     private fun showTalkRecording() {
         val max = TalkRecordService.MAX_MS / 1000
         show({
             addView(headline("대화 녹음 중"))
             addView(body("평소처럼 이야기하세요. 다른 화면을 봐도 계속 녹음해요. 다 이야기했으면 가운데 버튼을 누르세요."))
+            talkOrb = VoiceOrb(this@MainActivity).also {
+                it.color = ACTIVE
+                it.calm = driving
+                addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TALK_ORB_H)).apply { topMargin = dp(8) })
+            }
             wave = LevelStrip(this@MainActivity).also {
-                addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
+                addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             }
         }, ::showTalkRecording) {
-            talkLeft = text("", TITLE, TEXT3).apply { gravity = Gravity.CENTER }
-            aboveButton(" ", TEXT) {
-                talkTime = text("00:00 / ${clock(max.toFloat())}", TITLE, TEXT)
-                val status = column().apply {
-                    gravity = Gravity.END
-                    addView(text("●  대화 녹음 중", HEADLINE, RECORDING).apply { maxLines = 1 },
-                            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
-                    addView(talkTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = dp(4) })
-                }
+            orientation = LinearLayout.VERTICAL
+            talkLeft = text("녹음을 준비하는 중…", TITLE, TEXT3).apply { gravity = Gravity.CENTER }
+            addView(talkLeft, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(16) })
+            talkTime = text("00:00 / ${clock(max.toFloat())}", TITLE, TEXT)
+            val status = column().apply {
+                gravity = Gravity.END
+                addView(text("●  대화 녹음 중", HEADLINE, RECORDING).apply { maxLines = 1 },
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
+                addView(talkTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = dp(4) })
+            }
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 zones(button("✕  녹음 취소") { talkCancelled = true; TalkRecordService.stop(this@MainActivity) },
                       listOf(recordButton(Rec.RECORDING, "녹음 완료") { TalkRecordService.stop(this@MainActivity) }), status)
-            }
-            // 녹음 버튼 위 문구 자리에 남은 시간
-            (getChildAt(0) as? TextView)?.let { slot -> (slot.parent as? ViewGroup)?.let { p -> val i = p.indexOfChild(slot); p.removeViewAt(i); p.addView(talkLeft, i, slot.layoutParams) } }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         val token = scoreToken
+        var waited = 0
         fun tick() {
-            if (token != scoreToken || !TalkRecordService.recording) return
+            if (token != scoreToken) return
+            // 서비스가 마이크를 여는 데 잠깐 걸린다 — 전에는 그 사이에 갱신을 그만둬 시간이 00:00 에 멈춰 있었다(2026-11-10 사용자 화면)
+            if (!TalkRecordService.recording) {
+                if (TalkRecordService.result != null || waited++ > 50) return
+                ui.postDelayed({ tick() }, 100); return
+            }
             val el = TalkRecordService.elapsedMs() / 1000
             val left = max - el
-            wave?.push(TalkRecordService.levelDb(), ACTIVE)
+            val db = TalkRecordService.levelDb()
+            wave?.push(db, if (db > VOICE_DB) ACTIVE else TEXT3)
+            talkOrb?.level(db)
             talkTime?.text = "%02d:%02d / %s".format(el / 60, el % 60, clock(max.toFloat()))
             talkLeft?.text = if (left <= 60) "${left}초 뒤 녹음이 끝나요" else "남은 시간 %d분 %02d초".format(left / 60, left % 60)
             talkLeft?.setTextColor(if (left <= 60) RECORDING else TEXT3)
@@ -1850,26 +1917,30 @@ class MainActivity : Activity() {
         stopPlayback()
         if (!holdFocus()) { input.hint = "지금은 말로 넣을 수 없어요(통화·안내 중)"; return }
         listening = true
+        heardText = ""
+        heardState = "듣고 있어요"
         refresh()
         fun done(text: String?) {
             listening = false
             releaseFocus()
             recognizer?.destroy(); recognizer = null
             if (!text.isNullOrBlank()) onText(text)
+            voiceOrb = null
             refresh()
             if (!text.isNullOrBlank()) onFinal?.invoke(text)
         }
         recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { Log.i(tag, "음성 인식 준비") }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onReadyForSpeech(params: Bundle?) { Log.i(tag, "음성 인식 준비"); setHeard(state = "듣고 있어요 · 말씀하세요") }
+                override fun onBeginningOfSpeech() { setHeard(state = "듣고 있어요") }
+                // 인식 서비스가 주는 소리 크기(대략 -2~10) → 가운데 원(-60~-15dB 기준)
+                override fun onRmsChanged(rmsdB: Float) { voiceOrb?.level(-60.0 + (rmsdB + 2) * 3.75) }
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {}
+                override fun onEndOfSpeech() { setHeard(state = "알아들었어요 · 정리하는 중") }
                 override fun onError(error: Int) { Log.w(tag, "음성 인식 오류 $error"); done(null) }
                 override fun onResults(results: Bundle?) = done(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())
                 override fun onPartialResults(partial: Bundle?) {
-                    partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onText(it); input.setText(it) }
+                    partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { onText(it); input.setText(it); setHeard(text = it) }
                 }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
@@ -1881,6 +1952,45 @@ class MainActivity : Activity() {
     }
 
     private var promptInput: EditText? = null
+
+    // ---------- 음성 인식 표시(VUI) — 듣는 동안 화면 가운데 ----------
+    private var heardText = ""
+    private var heardState = ""
+    private var voiceOrb: VoiceOrb? = null
+    private var heardView: TextView? = null
+    private var heardStateView: TextView? = null
+
+    private fun setHeard(text: String? = null, state: String? = null) {
+        text?.let { heardText = it; heardView?.text = it.ifEmpty { "…" } }
+        state?.let { heardState = it; heardStateView?.text = it }
+    }
+
+    /**
+     * 말로 넣는 동안 화면 가운데에 뜨는 표시(2026-11-10 사용자: "음성 인식하면 표시해 주는 것 — 화면 중앙에").
+     * 목소리에 반응하는 원 · 상태(듣고 있어요 → 알아들었어요) · 알아들은 말 실시간 · 그만 버튼. 바탕은 어둡게 깔아 무엇을 하는지 분명히.
+     * show() 가 화면을 다시 그려도 듣는 중이면 다시 얹는다.
+     */
+    private fun voiceOverlay(): View = FrameLayout(this).apply {
+        setBackgroundColor(Color.argb(0xB0, 0x13, 0x14, 0x17))
+        isClickable = true  // 뒤 화면을 누르지 않게
+        addView(column().apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = round(SURFACE, 32)
+            setPadding(dp(48), dp(32), dp(48), dp(36))
+            voiceOrb = VoiceOrb(this@MainActivity).also { o ->
+                o.color = ACTIVE; o.calm = driving
+                addView(o, LinearLayout.LayoutParams(dp(VOICE_ORB), dp(VOICE_ORB)))
+            }
+            heardStateView = text(heardState, BODY_STRONG, ACTIVE).apply { gravity = Gravity.CENTER }
+            addView(heardStateView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            heardView = text(heardText.ifEmpty { "…" }, HEADLINE, TEXT).apply { gravity = Gravity.CENTER; maxLines = 3 }
+            addView(heardView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(text("말이 끝나면 저절로 넣어요", BODY_S, TEXT3).apply { gravity = Gravity.CENTER },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+            addView(button("그만", size = Size.MEDIUM) { recognizer?.cancel(); recognizer?.destroy(); recognizer = null
+                listening = false; releaseFocus(); voiceOrb = null; refresh() }.withMargin(top = 20))
+        }, FrameLayout.LayoutParams(dp(VOICE_PANEL_W), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+    }
 
     /** 주사위: 서버 주제 목록에서 아무거나(지금과 다른 것). 서버가 안 되면 앱에 있는 목록. */
     private fun rollTheme(input: EditText) {
@@ -4098,6 +4208,9 @@ class MainActivity : Activity() {
                                 KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_HEADSETHOOK)
         /** Gleo 가 말하기를 끝내고 오디오 포커스를 놓을 틈. */
         const val GLEO_GAP_MS = 700L
+        /** 음성 인식 표시: 가운데 원 크기 · 판 폭. */
+        const val VOICE_ORB = 320
+        const val VOICE_PANEL_W = 880
         const val MUSIC_SOURCE = "music_source"
         const val DEFAULT_KEY = "default"
         const val PROBE_SEC = 4
@@ -4110,6 +4223,8 @@ class MainActivity : Activity() {
         const val REQ_VOICE = 3
         const val REQ_TALK = 7
         const val TALK_MIN_SEC = 5
+        /** 대화 녹음 화면 가운데 목소리 원 높이. */
+        const val TALK_ORB_H = 420
         /** 대화로 만들 노래의 방향(서버 talk.FEELINGS 와 같은 이름). */
         val TALK_DIRECTIONS = linkedMapOf(
             "그대로" to "대화에서 드러난 감정을 그대로 살려요. 위로나 교훈으로 바꾸지 않아요.",

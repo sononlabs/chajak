@@ -1,7 +1,7 @@
 {
   "packageName": "ai.sonon.chajak",
   "invokeWord": "차작",
-  "appDescription": "Chajak turns a melody the driver hums in the car into a finished song with lyrics and cover art, and lets the driver change the arrangement by voice.",
+  "appDescription": "Chajak turns a melody the driver hums, or a conversation recorded in the car, into a finished song with lyrics and cover art, and lets the driver change the arrangement and play songs by voice.",
   "version": "0.4.10-drive",
   "actionCalls": [
     {
@@ -10,7 +10,11 @@
         "component": "activity",
         "name": "START_HUM_RECORDING",
         "description": "Starts recording the user's humming after a short 3-2-1 sound countdown, so the melody can be turned into a song.",
-        "parameters": { "type": "object", "properties": {}, "required": [] }
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
       }
     },
     {
@@ -24,11 +28,16 @@
           "properties": {
             "result": {
               "type": "string",
-              "enum": ["save", "cancel"],
+              "enum": [
+                "save",
+                "cancel"
+              ],
               "description": "save keeps the recording and converts it into a melody; cancel discards the recording."
             }
           },
-          "required": ["result"]
+          "required": [
+            "result"
+          ]
         }
       }
     },
@@ -46,7 +55,72 @@
               "description": "The change the user wants to the arrangement, kept in the user's own words and language."
             }
           },
-          "required": ["request"]
+          "required": [
+            "request"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "START_CONVERSATION_RECORDING",
+        "description": "Opens the conversation recording screen so the people in the car can record their talk (up to thirty minutes) and turn it into song lyrics. Recording starts after the user confirms on screen that everyone was told.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "FINISH_CONVERSATION_RECORDING",
+        "description": "Ends the conversation recording that is in progress, either keeping it to write down and turn into a song story or discarding it.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string",
+              "enum": [
+                "save",
+                "cancel"
+              ],
+              "description": "save keeps the recording; cancel discards it."
+            }
+          },
+          "required": [
+            "result"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "PLAY_LATEST_SONG",
+        "description": "Plays the most recently finished song in Chajak.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "component": "activity",
+        "name": "STOP_SONG",
+        "description": "Stops the Chajak song that is playing.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
         }
       }
     }

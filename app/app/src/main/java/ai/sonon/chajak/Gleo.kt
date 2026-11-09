@@ -8,7 +8,7 @@ import org.json.JSONObject
 /**
  * Pleos Gleo Interface(시스템 음성 비서) 연동 — "차작, 녹음 시작해 줘" 같은 말로 앱 기능을 부른다.
  *
- * - 부를 수 있는 기능은 `assets/schema.json`(App Schema)에 3개: 녹음 시작 · 녹음 끝내기(저장/취소) · 편곡 바꾸기.
+ * - 부를 수 있는 기능은 `assets/schema.json`(App Schema)에 7개: 허밍 녹음 시작·끝내기 · 편곡 바꾸기 · 대화 녹음 시작·끝내기 · 최근 노래 틀기 · 노래 멈추기.
  * - Gleo 는 기능 이름을 Intent action 으로, 파라미터를 extras "ACTION_PARAM"(JSON 문자열)으로 보낸다(component = activity → startActivity).
  * - 결과는 7초 안에 브로드캐스트 `APP_ACTION_RESPONSE` 로 돌려준다(extras: packageName, response = {functionName, status, message, mode, data}).
  *   message 는 영어 문장(문서 규칙), Gleo 가 그걸 바탕으로 사용자에게 말한다.
@@ -19,7 +19,11 @@ object Gleo {
     const val START = "START_HUM_RECORDING"
     const val FINISH = "FINISH_HUM_RECORDING"
     const val ARRANGE = "CHANGE_SONG_ARRANGEMENT"
-    val ACTIONS = setOf(START, FINISH, ARRANGE)
+    const val TALK_START = "START_CONVERSATION_RECORDING"
+    const val TALK_FINISH = "FINISH_CONVERSATION_RECORDING"
+    const val PLAY = "PLAY_LATEST_SONG"
+    const val STOP = "STOP_SONG"
+    val ACTIONS = setOf(START, FINISH, ARRANGE, TALK_START, TALK_FINISH, PLAY, STOP)
 
     private const val PARAM = "ACTION_PARAM"
     private const val RESPONSE = "ai.pleos.playground.intent.action.APP_ACTION_RESPONSE"
