@@ -604,6 +604,30 @@ def _melody_mood(src_abc: str, first: dict) -> dict | None:
 
 
 async def _run_final(app, job: dict, song: dict):
+    """노래 작업은 한 번에 하나씩(2026-11-10 사용자: 만드는 중에 또 누르면 대기열로). GPU 하나에 노래·표지·작사 모델이
+    겹치면 메모리가 모자란다. 기다리는 동안 status=queued, stage=queue, queue_ahead=앞에 남은 수."""
+    waiting: list = app["final_waiting"]
+    waiting.append(job["id"])
+    job.update(status="queued", stage="queue")
+    try:
+        while True:
+            ahead = waiting.index(job["id"])
+            job["queue_ahead"] = ahead + (1 if app["final_lock"].locked() else 0)
+            if ahead == 0 and not app["final_lock"].locked():
+                break
+            await asyncio.sleep(1)
+        async with app["final_lock"]:
+            waiting.remove(job["id"])
+            job.pop("queue_ahead", None)
+            job["created"] = time.time()  # 진행 막대·남은 시간은 실제로 시작한 때부터
+            job["stage"] = "melody"
+            await _run_final_now(app, job, song)
+    finally:
+        if job["id"] in waiting:
+            waiting.remove(job["id"])
+
+
+async def _run_final_now(app, job: dict, song: dict):
     cf: C.Comfy = app["comfy"]
     store: Store = app["store"]
     d = store.dir(song["id"])
@@ -919,7 +943,9 @@ def make_app(comfy_url: str) -> web.Application:
     app["comfy"] = C.Comfy(comfy_url)
     app["jobs"] = _load_jobs()
     app["ai_tasks"] = set()
-    app["talk_jobs"] = {}  # 대화 분석 작업(메모리에만, 1시간)
+    app["talk_jobs"] = {}
+    app["final_lock"] = asyncio.Lock()  # 노래 작업은 차례대로
+    app["final_waiting"] = []  # 대화 분석 작업(메모리에만, 1시간)
 
     async def on_start(app):
         await app["comfy"].start()

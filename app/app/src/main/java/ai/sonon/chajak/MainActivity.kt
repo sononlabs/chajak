@@ -221,7 +221,7 @@ class MainActivity : Activity() {
                 when {
                     req.isEmpty() -> Gleo.respond(this, action, "asking", "How would you like to change the arrangement?")
                     f == null -> Gleo.respond(this, action, "asking", "Please open the finished song you want to change in Chajak first.")
-                    finalSubmitting || finalJob != null -> Gleo.respond(this, action, "fail", "A new version of this song is already being made.")
+                    finalSubmitting -> Gleo.respond(this, action, "fail", "A new version is being sent. Please try again in a moment.")
                     recording || counting -> Gleo.respond(this, action, "fail", "Please finish the recording first.")
                     else -> {
                         prompt = f.optString("prompt", prompt)
@@ -826,9 +826,14 @@ class MainActivity : Activity() {
     private fun showRecording(music: Boolean = false, direct: Boolean = false): Unit = show({
         // "녹음 중"·시간은 아래 줄 오른쪽, 소리 상태 문구("잘 들려요"·"마이크에서 소리가 전혀…")는 녹음 버튼 바로 위 —
         // 2026-11-09 사용자: 녹음과 관련된 글은 녹음 버튼 가까이. 위에는 파형·음역만
-        // 파형(가운데 점선 → 소리 나면 막대)
+        // 가운데 목소리 원(2026-11-10 사용자: 테두리 글로우가 소리와 상관없이 늘 보여서 → 대화 녹음과 같은 효과로) + 파형
+        recOrb = VoiceOrb(this@MainActivity).also {
+            it.color = if (music) POSITIVE else ACTIVE
+            it.calm = driving
+            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(REC_ORB_H)))
+        }
         wave = LevelStrip(this@MainActivity).also {
-            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         }
         liveRange = if (music) null else RangeBar(this@MainActivity, faces.getOrPut(BODY_S_STRONG.font) { resources.getFont(BODY_S_STRONG.font) }).also {
             addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
@@ -910,22 +915,30 @@ class MainActivity : Activity() {
         (if (DeviceCheck.emulator) " (에뮬레이터: PC 에 실제 마이크가 연결돼 있고 Windows 기본 녹음 장치로 잡혀 있는지 확인해 주세요.)" else "")
 
     /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주·트랙 빼기 오류면 곡으로 돌아간다. */
-    private fun showError(message: String, deviceHelp: Boolean = false, settingsHelp: Boolean = false) {
+    private fun showError(message0: String, deviceHelp: Boolean = false, settingsHelp: Boolean = false) {
         val retry = song == null || stackMode != null
+        val music = lastUploadMusic
+        // 음악 녹음 실패인데 "흥얼거려 주세요"가 나왔다(2026-11-10 사용자) — 음악용 안내로
+        val message = if (music && message0.contains("멜로디를 찾지 못했어요"))
+            "음악에서 멜로디를 찾지 못했어요. 노래(목소리)가 또렷한 부분을 10초 넘게 담아 주세요. 이어폰 마이크는 소음 제거로 스피커 음악을 지울 수 있어요 — 차 안에서 튼 음악은 '재생 소리 직접'으로 담으면 정확해요."
+            else message0
         show({
             addView(headline("다시 한 번 해 볼까요?"))
             // 다시 녹음할 수 있는 오류는 이유를 녹음 버튼 바로 위에(2026-11-09 사용자) — 여기서는 제목만
             if (!retry) addView(text(message, BODY, TEXT))
-        }, { showError(message, deviceHelp, settingsHelp) }) {
+        }, { showError(message0, deviceHelp, settingsHelp) }, tabs = true) {  // 탭은 그대로(2026-11-10 사용자: 탭이 사라져 당황)
             val back = when {
                 settingsHelp -> button("⚙  설정") { showSettings() }
                 deviceHelp -> button("🔍  녹음 장치 확인") { showDeviceCheck() }
-                song != null -> button("곡으로 돌아가기") { stackMode = null; showSong(false) }
-                else -> null
+                song != null && stackMode != null -> button("곡으로 돌아가기") { stackMode = null; showSong(false) }
+                song != null -> button("곡으로 돌아가기") { showSong(false) }
+                else -> button("← 녹음실") { showHome() }
             }
             when {
-                !retry -> zones(null, listOfNotNull(back?.withMargin()))
-                else -> aboveButton(message, TEXT) { zones(back, listOf(recordButton(Rec.READY, "다시 녹음 시작") { startRecording() })) }
+                !retry -> zones(null, listOfNotNull(back.withMargin()))
+                else -> aboveButton(message, TEXT) { zones(back, listOf(
+                    if (music) recordButton(Rec.READY, "다시 음악 녹음") { startMusicRecording() }
+                    else recordButton(Rec.READY, "다시 녹음 시작") { startRecording() })) }
             }
         }
     }
@@ -1347,9 +1360,10 @@ class MainActivity : Activity() {
             addView(caption("한 소절을 전주·절·후렴·브리지로 늘리고, 주제로 가사·제목을 쓰고, 앨범 표지를 그려 노래로 만들어요. 약 3분 — 주행을 시작해도 계속 만들어요.", TEXT3).withMargin(top = 16))
         }, ::showCreate, tabs = true) {
             zones(button("← 내 멜로디") { showSong(false) },
-                listOf(if (making) recordButton(Rec.BUSY, "만드는 중", onClick = null)
+                listOf(if (making) recordButton(Rec.BUSY, "만드는 중" + queueTail(), onClick = null)
                        else button("노래 만들기", Btn.SECONDARY) { createFinal() }),
-                s.optJSONObject("final")?.let { button("완성된 노래 →") { showPlayer(false) } })
+                if (job != null) button("＋ 하나 더(대기열)") { createFinal() }
+                else s.optJSONObject("final")?.let { button("완성된 노래 →") { showPlayer(false) } })
         }
     }
 
@@ -1508,6 +1522,7 @@ class MainActivity : Activity() {
      * 아래 줄 위에 남은 시간(마지막 1분은 빨갛게), 오른쪽에 "12:34 / 30:00".
      */
     private var talkOrb: VoiceOrb? = null
+    private var recOrb: VoiceOrb? = null
 
     private fun showTalkRecording() {
         val max = TalkRecordService.MAX_MS / 1000
@@ -2107,7 +2122,9 @@ class MainActivity : Activity() {
 
     private fun createFinal(from: String? = null, keepLyrics: Boolean = false, lyrics: JSONObject? = null, keepCover: Boolean = false, edit: String? = null) {
         val s = song ?: return
-        if (finalSubmitting || finalJob != null || recording || counting || TalkRecordService.recording) return
+        if (finalSubmitting || recording || counting || TalkRecordService.recording) return
+        // 만드는 중에 또 누르면 대기열로(2026-11-10 사용자) — 서버가 차례대로 만든다. 화면은 그대로 두고 알려만 준다
+        val queueIt = finalJob != null
         finalSubmitting = true
         saveDraft()
         stopPlayback()
@@ -2121,13 +2138,17 @@ class MainActivity : Activity() {
         if (!edit.isNullOrBlank()) options.put("edit", edit)
         if (from == null) talkPayload(s)?.let { options.put("talk", it) }
         if (talkResult == null || talkFor != s.optString("id")) autoPickNote = null
-        playerVersion = null
-        showCreate()
+        if (!queueIt) { playerVersion = null; showCreate() }
         io.execute {
             try {
                 val j = api.startFinal(s.getString("id"), promptSnapshot, options)
                 ui.post {
-                    if (!isDestroyed) {
+                    if (!isDestroyed && queueIt) {
+                        finalSubmitting = false
+                        queuedJobs.add(j); saveQueue()
+                        android.widget.Toast.makeText(this, "대기열에 넣었어요 · ${queuedJobs.size}번째로 만들어요", android.widget.Toast.LENGTH_LONG).show()
+                        if (active && !recording && !counting) refresh()
+                    } else if (!isDestroyed) {
                         finalSubmitting = false
                         rememberFinalJob(j)
                         prompt = j.optString("prompt", promptSnapshot)
@@ -2143,6 +2164,22 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    /** 대기열: 지금 만드는 것 뒤에 서버에 넣어 둔 노래 작업들(앱을 다시 켜도 이어지게 prefs 에). */
+    private val queuedJobs: MutableList<JSONObject> by lazy {
+        runCatching { org.json.JSONArray(prefs.getString(QUEUED_JOBS, "[]")) }.getOrNull()
+            ?.let { a -> (0 until a.length()).map { a.getJSONObject(it) }.toMutableList() } ?: mutableListOf()
+    }
+
+    private fun saveQueue() = prefs.edit().putString(QUEUED_JOBS, org.json.JSONArray(queuedJobs).toString()).apply()
+
+    /** 앞 작업이 끝나면 다음 대기 작업의 진행을 이어서 본다(서버는 이미 차례대로 만들고 있다). */
+    private fun startNextQueued() {
+        val next = queuedJobs.removeFirstOrNull() ?: return
+        saveQueue()
+        rememberFinalJob(next)
+        pollFinal(next.optString("song_id"), next.optString("id"))
     }
 
     /** 1초마다 작업 단계를 묻는다(약 3분). 끝나면 곡을 다시 받아 표지를 내려받고 노래 듣기 화면으로. 다른 서버 호출을 막지 않게 따로 돈다. */
@@ -2163,6 +2200,7 @@ class MainActivity : Activity() {
                             ui.post {
                                 if (token == finalPollToken && !isDestroyed) {
                                     rememberFinalJob(null)
+                                    startNextQueued()
                                     val sameSong = song?.optString("id") == songId
                                     if (sameSong) song = completed
                                     if (active && sameSong && !recording && !counting && drill == Drill.IDLE) {
@@ -2182,6 +2220,7 @@ class MainActivity : Activity() {
                             ui.post {
                                 if (token == finalPollToken && !isDestroyed) {
                                     rememberFinalJob(null)
+                                    startNextQueued()
                                     val message = "노래를 만들지 못했어요. ${j.optString("error").take(80)}"
                                     if (active && !recording && !counting) showError(message)
                                     else Log.w(tag, message)
@@ -2213,6 +2252,7 @@ class MainActivity : Activity() {
                         ui.post {
                             if (token == finalPollToken && !isDestroyed) {
                                 rememberFinalJob(null)
+                                startNextQueued()
                                 if (active && !recording && !counting) showError("이전 생성 작업을 찾지 못했어요. 내 노래에서 저장된 결과를 확인해 주세요.")
                                 loadLibrary()
                             }
@@ -2293,9 +2333,12 @@ class MainActivity : Activity() {
     private var homeFinalText: TextView? = null
 
     private fun homeFinalLine(j: JSONObject, elapsed: Float, eta: Float): String {
+        if (j.optString("stage") == "queue") return "차례를 기다리는 중 · 앞에 ${j.optInt("queue_ahead", 1)}개" + queueTail()
         val stage = FINAL_STAGES.firstOrNull { it.first == j.optString("stage") }?.second?.substringBefore(" (") ?: "준비하는 중"
-        return "$stage · 약 ${clock(maxOf(0f, eta - elapsed))} 남음"
+        return "$stage · 약 ${clock(maxOf(0f, eta - elapsed))} 남음" + queueTail()
     }
+
+    private fun queueTail() = if (queuedJobs.isNotEmpty()) " · 대기 ${queuedJobs.size}개" else ""
 
     /**
      * 녹음실의 "만드는 노래" 카드(2026-11-09 시나리오 점검): 전에는 "만드는 노래 · 상태 보기" 버튼 하나라 눌러야 진행을 알았다.
@@ -2437,7 +2480,7 @@ class MainActivity : Activity() {
             }
             addView(input, LinearLayout.LayoutParams(0, dp(88), 1f).apply { marginEnd = dp(12) })
             fun submit(req: String) {
-                if (req.isBlank() || finalSubmitting || finalJob != null) return
+                if (req.isBlank() || finalSubmitting) return
                 editText = ""
                 prompt = f.optString("prompt", prompt)
                 createFinal(from = f.optString("id").ifEmpty { null }, keepLyrics = true, keepCover = true, edit = req.trim())
@@ -2564,20 +2607,20 @@ class MainActivity : Activity() {
                 f.optString("edit_summary").takeIf { it.isNotEmpty() && it != "null" }?.let { col.addView(text("✦ 이번 버전: $it", BODY_S, POSITIVE).withMargin(top = 4)) }
                 // 재생 위치 막대·시간은 아래 줄에서 재생 버튼과 함께(2026-11-10 사용자: "재생 관련된 건 하단 바에 함께")
                 // 다시 만들기 한 곳: 말로 바꾸기 + AI 제안 단추 + 세부 설정(접힘)
-                if (finalJob == null) {
+                run {  // 만드는 중에도 다시 만들기 — 누르면 대기열로
                     col.addView(label("다시 만들기 · 마음에 안 드는 점을 말하거나 제안을 누르세요"))
                     col.addView(editRow(f))
                     if (!driving) col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 12))
                 }
                 // 다시 만들기(설정 다시 쓰기 · 다른 편곡 · 가사 고치기): 이 버전을 바탕으로 가중치·주제·가사를 바꿔 새 버전
-                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 가중치·가사·표지 ▾", size = Size.MEDIUM, enabled = finalJob == null) {
+                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 가중치·가사·표지 ▾", size = Size.MEDIUM) {
                     showRemix = !showRemix
                     if (showRemix) { prompt = f.getString("prompt"); f.optJSONObject("options")?.let { o ->
                         finalSeconds = o.optInt("seconds", 120); voice = o.optString("voice", "auto")
                         melodyWeight = o.optInt("melody_weight", 80); styleWeight = o.optInt("style_weight", 50) } }
                     showPlayer(false)
                 }.withMargin(top = 16))
-                if (showRemix && finalJob == null) {
+                if (showRemix) {
                     val panel = column().apply { background = round(SURFACE, 24); setPadding(dp(28), dp(8), dp(28), dp(28)) }
                     panel.addView(caption("지금: ${f.optString("style")} · 멜로디 ${f.optJSONObject("options")?.optInt("melody_weight")} · 스타일 ${f.optJSONObject("options")?.optInt("style_weight")}", TEXT3))
                     panel.addView(label("주제"))
@@ -3592,7 +3635,7 @@ class MainActivity : Activity() {
         musicCapturing = music  // showRecording 의 안내 문구가 음악용인지 본다
         showRecording(music, direct = capture != null)
         // 소리 안내(3·2·1 · 띠링)에 더해 눈으로도 녹음 중임을 바로 알게 — 화면 맨 위에 겹친다(터치는 통과)
-        glow = EdgeGlow(this).also { it.calm = driving; root.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)) }
+        // 테두리 글로우는 쓰지 않는다(소리와 상관없이 늘 보였다) — 가운데 목소리 원이 소리에 반응한다
         recording = true
         cancelled = false
         if (music) Log.i(tag, "음악 녹음 시작: ${if (capture != null) "재생 소리 직접" else "차량 마이크"}, 포커스 요청 없음")
@@ -3632,7 +3675,7 @@ class MainActivity : Activity() {
                             else -> hearingState
                         }, nowMs - started)
                         // -60dB(조용) ~ -10dB(큼) 을 0~100% 로. 커질 땐 바로, 작아질 땐 천천히.
-                        glow?.level(((db + 60) / 50).toFloat())
+                        recOrb?.level(db)
                         halo?.let {
                             val target = HALO_MIN + (1 - HALO_MIN) * ((db + 60) / 50).coerceIn(0.0, 1.0).toFloat()
                             val k = it.scaleX + (target - it.scaleX) * (if (target > it.scaleX) 0.7f else 0.25f)
@@ -3681,7 +3724,11 @@ class MainActivity : Activity() {
         }
     }
 
+    /** 마지막으로 올린 것이 음악 녹음인지(오류 안내·다시 녹음 버튼을 음악용으로). */
+    private var lastUploadMusic = false
+
     private fun upload(file: File, music: Boolean = false) {
+        lastUploadMusic = music
         val s = song
         val mode = stackMode
         val inst = instrumentNames[instrument]
@@ -4226,7 +4273,7 @@ class MainActivity : Activity() {
         /** 앱에서 직접 정한 서버 주소(prefs). 없으면 빌드 기본값. */
         const val SERVER_CUSTOM = "server_custom"
         /** 완전한 무음 판단: 녹음 내내 이보다 작으면(실제 마이크는 조용한 방에서도 -60~-75dB 잡음이 있다) · 시작 후 이만큼 지나서 안내. */
-        const val SILENT_DB = -85.0
+        const val SILENT_DB = -80.0
         const val SILENT_AFTER_MS = 2500L
         const val NO_SIGNAL_PLAYBACK = "재생 소리가 전혀 들어오지 않았어요. 음악이 재생 중일 때 다시 담아 주세요."
         /** 흥얼거림이 들릴 때 녹음 버튼 둘레로 퍼지는 고리: 퍼지는 시간 · 새 고리 간격. */
@@ -4322,6 +4369,10 @@ class MainActivity : Activity() {
         const val TAB_GAP = 32
         /** 미니 플레이어 폭. */
         const val MINI_W = 560
+        /** 허밍·음악 녹음 화면 가운데 목소리 원 높이. */
+        const val REC_ORB_H = 300
+        /** 대기열에 넣어 둔 노래 작업(prefs). */
+        const val QUEUED_JOBS = "queued_final_jobs"
         /** 녹음실 양옆(대화·음악) 버튼 칸 폭. */
         const val SIDE_REC_W = 180
         /** 내 노래 보기 방식(tile·list). */
