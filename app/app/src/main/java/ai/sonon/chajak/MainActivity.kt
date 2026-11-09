@@ -123,7 +123,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        api = ChajakApi(intent.getStringExtra("server") ?: BuildConfig.SERVER_URL)
+        api = ChajakApi(intent.getStringExtra("server") ?: prefs.getString(SERVER_CUSTOM, null) ?: BuildConfig.SERVER_URL)
         // 미디어 서비스(차량 미디어 센터·음성 검색)가 화면 없이도 서버를 알 수 있게 둔다
         prefs.edit().putString("server", api.base).apply()
         restoreDraft()
@@ -371,10 +371,12 @@ class MainActivity : Activity() {
                 try { bar() } catch (e: Exception) { Log.e(this@MainActivity.tag, "아래 줄을 그리지 못함", e) }
             })
         }
-        if (!tabs) return root.addView(page)
+        // 탭이 없는 화면(카운트다운·녹음 중·오류 등)도 같은 폭의 빈 칸을 둔다 — 2026-11-09: 녹음실에서 누른 녹음 버튼이
+        // 녹음 화면에서 옆으로 116px 옮겨 가 "녹음 완료"를 같은 자리에서 누를 수 없었다(주행 중 힐끗 보고 누르는 버튼)
         root.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(tabRail(), LinearLayout.LayoutParams(dp(TAB_W), ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(if (tabs) tabRail() else View(this@MainActivity).apply { setBackgroundColor(SURFACE) },
+                    LinearLayout.LayoutParams(dp(TAB_W), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(View(this@MainActivity).apply { setBackgroundColor(TINT_PRESSED) }, LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(page, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         })
@@ -543,7 +545,6 @@ class MainActivity : Activity() {
         val stacking = stackMode != null && song != null
         show({
             onHome = true
-            noticeView()?.let { addView(it) }
             addView(steps(0))
             addView(headline(if (stacking) (if (stackMode == "overlay") "겹쳐 부르기" else "이어 부르기") else "녹음실"))
             addView(body(if (stacking) "지금 멜로디 위에 얹을 멜로디를 흥얼거려 주세요. 박자와 조성은 곡에 맞춰 드려요."
@@ -560,7 +561,7 @@ class MainActivity : Activity() {
                 addView(rangeCard())
             }
         }, ::showHome, tabs = true) {
-            zones(
+            aboveButton(notice?.also { notice = null }, TEXT) { zones(
                 if (stacking) button("내 멜로디로") { stackMode = null; showSong(false) } else button("흥얼거리기 요령") { showTutorial() },
                 listOf(if (!canRecord) recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null)
                        else recordButton(Rec.READY, "녹음 시작") { startRecording() }),
@@ -572,7 +573,7 @@ class MainActivity : Activity() {
                     addView(inputPill(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(32) })
                     addView(musicRecordButton(canRecord))
                 },
-            )
+            ) }
         }
     }
 
@@ -599,10 +600,11 @@ class MainActivity : Activity() {
     private fun showCountdown(n: Int): Unit = show({
         // 0 = '띠링' 이 울리는 순간 — 녹음이 열리기 직전 화면에도 "지금"을 보여 준다
         addView(headline(if (n == 0) "지금 흥얼거리세요!" else "곧 녹음을 시작해요"))
-        addView(body("3·2·1 '삑' 소리 뒤에 높은 '띠링' 소리가 나면 바로 흥얼거리세요. 시작 전에 그만두려면 녹음 취소를 누르세요."))
     }, {}) {
-        // 시작 전에도 취소는 녹음 중과 같은 자리(왼쪽)에 — 가운데 숫자 버튼을 눌러도 취소된다
-        zones(button("✕  녹음 취소") { cancelCountdown() }, listOf(recordButton(Rec.COUNTDOWN, "녹음 취소", count = n) { cancelCountdown() }))
+        // 시작 전에도 취소는 녹음 중과 같은 자리(왼쪽)에 — 가운데 숫자 버튼을 눌러도 취소된다. 안내 문구는 녹음 버튼 바로 위
+        aboveButton("3·2·1 '삑' 소리 뒤에 높은 '띠링' 소리가 나면 바로 흥얼거리세요. 시작 전에 그만두려면 녹음 취소를 누르세요.", TEXT) {
+            zones(button("✕  녹음 취소") { cancelCountdown() }, listOf(recordButton(Rec.COUNTDOWN, "녹음 취소", count = n) { cancelCountdown() }))
+        }
     }
 
     private lateinit var remain: TextView
@@ -610,18 +612,11 @@ class MainActivity : Activity() {
 
     /** 녹음 중: 소리가 들리는지(hearing 문구)와, 흥얼거림이 들릴 때 녹음 버튼 둘레에 번지는 원으로 반응한다. */
     private fun showRecording(music: Boolean = false, direct: Boolean = false): Unit = show({
-        addView(LinearLayout(this@MainActivity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.BOTTOM
-            addView(text(if (music) "●  음악 녹음 중" else "●  녹음 중", HEADLINE, RECORDING), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            remain = text("", TITLE, TEXT)
-            addView(remain)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
-        hearing = text("", TITLE, TEXT3).withMargin(top = 24)
-        addView(hearing)
+        // "녹음 중"·시간은 아래 줄 오른쪽, 소리 상태 문구("잘 들려요"·"마이크에서 소리가 전혀…")는 녹음 버튼 바로 위 —
+        // 2026-11-09 사용자: 녹음과 관련된 글은 녹음 버튼 가까이. 위에는 파형·음역만
         // 파형(가운데 점선 → 소리 나면 막대)
         wave = LevelStrip(this@MainActivity).also {
-            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
+            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         liveRange = if (music) null else RangeBar(this@MainActivity, faces.getOrPut(BODY_S_STRONG.font) { resources.getFont(BODY_S_STRONG.font) }).also {
             addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
@@ -631,10 +626,28 @@ class MainActivity : Activity() {
             direct -> "재생 중인 음악을 그대로 담고 있어요(음악은 멈추지 않아요). 원하는 부분이 끝나면 가운데 버튼을 누르세요. 남의 노래 멜로디는 내 노래로 공유하지 마세요."
             else -> "차량 마이크로 음악을 듣고 있어요. 원하는 부분이 끝나면 가운데 버튼을 누르세요."
         }).withMargin(top = 12))
-        setHearing(Hearing.WAITING)
     }, {}) {
-        // 녹음 세 동작: 시작(녹음실 가운데) · 완료(가운데 — 바로 음표로) · 취소(왼쪽 — 녹음을 버리고 돌아감)
-        zones(button("✕  녹음 취소") { cancelRecording() }, listOf(recordButton(Rec.RECORDING, "녹음 완료") { recorder.stop() }))
+        // 녹음 세 동작: 시작(녹음실 가운데) · 완료(가운데 — 바로 음표로) · 취소(왼쪽 — 녹음을 버리고 돌아감).
+        // 오른쪽: 녹음 중 표시와 시간(눈이 녹음 버튼 근처에 머물게)
+        orientation = LinearLayout.VERTICAL
+        hearing = text("", TITLE, TEXT3).apply { gravity = Gravity.CENTER }
+        addView(hearing, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(16) })
+        remain = text("", TITLE, TEXT).apply { gravity = Gravity.END }
+        val status = column().apply {
+            gravity = Gravity.END
+            // 세로 줄에 그냥 넣으면 폭이 MATCH_PARENT 가 되어 시간 글자 폭에 맞춰 잘렸다("●"만 보임) — 둘 다 글자 폭대로
+            addView(text(if (music) "●  음악 녹음 중" else "●  녹음 중", HEADLINE, RECORDING).apply { maxLines = 1 },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
+            addView(remain, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = dp(4) })
+        }
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            zones(button("✕  녹음 취소") { cancelRecording() }, listOf(recordButton(Rec.RECORDING, "녹음 완료") { recorder.stop() }), status)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        hearingState = Hearing.WAITING
+        hearing.text = ""
+        setHearing(Hearing.WAITING)
     }
 
     /** 흥얼거림이 들리는 동안 녹음 버튼 둘레로 빨간 고리가 퍼져 나간다. */
@@ -660,17 +673,26 @@ class MainActivity : Activity() {
         hearing.setTextColor(if (state == Hearing.VOICE) TEXT else TEXT3)
     }
 
+    private fun noSignalMic() = "마이크에서 소리가 전혀 들어오지 않았어요. 흥얼거림이 작아서가 아니라, 마이크가 연결되지 않았거나 소리가 안 들어오는 장치가 골라져 있을 때 이래요. " +
+        "녹음 장치 확인에서 소리가 들어오는 장치를 골라 주세요." +
+        (if (DeviceCheck.emulator) " (에뮬레이터: PC 에 실제 마이크가 연결돼 있고 Windows 기본 녹음 장치로 잡혀 있는지 확인해 주세요.)" else "")
+
     /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주·트랙 빼기 오류면 곡으로 돌아간다. */
-    private fun showError(message: String) {
+    private fun showError(message: String, deviceHelp: Boolean = false) {
         val retry = song == null || stackMode != null
         show({
             addView(headline("다시 한 번 해 볼까요?"))
-            addView(text(message, BODY, TEXT))
-        }, { showError(message) }) {
-            val back = if (song != null) button("곡으로 돌아가기") { stackMode = null; showSong(false) } else null
+            // 다시 녹음할 수 있는 오류는 이유를 녹음 버튼 바로 위에(2026-11-09 사용자) — 여기서는 제목만
+            if (!retry) addView(text(message, BODY, TEXT))
+        }, { showError(message, deviceHelp) }) {
+            val back = when {
+                deviceHelp -> button("🔍  녹음 장치 확인") { showDeviceCheck() }
+                song != null -> button("곡으로 돌아가기") { stackMode = null; showSong(false) }
+                else -> null
+            }
             when {
                 !retry -> zones(null, listOfNotNull(back?.withMargin()))
-                else -> zones(back, listOf(recordButton(Rec.READY, "다시 녹음 시작") { startRecording() }))
+                else -> aboveButton(message, TEXT) { zones(back, listOf(recordButton(Rec.READY, "다시 녹음 시작") { startRecording() })) }
             }
         }
     }
@@ -2510,10 +2532,71 @@ class MainActivity : Activity() {
                 })
                 addView(text("지금 누르면: " + (if (musicNeedsCapture()) "재생 소리를 직접 담아요" else "마이크로 담아요"), BODY_S_STRONG, POSITIVE).withMargin(top = 12))
             }.withMargin(fill = true))
+
+            addView(label("서버 연결"))
+            addView(serverCard().withMargin(fill = true))
         }, ::showDeviceCheck, tabs = true) {
             zones(button("← 녹음실") { showHome() }, listOf(), button("다시 확인") { probeResults.clear(); showDeviceCheck() })
         }
         probeMeters = meters
+    }
+
+    private var serverStatus: String? = null
+
+    /**
+     * 차작 서버 주소(노래를 만드는 PC). 기본은 빌드할 때 정한 주소(에뮬레이터 = 같은 PC 10.0.2.2).
+     * 다른 PC 의 협업자·심사 기기는 서버 PC 가 열어 둔 주소(예: https://….trycloudflare.com)를 넣는다. 글자 입력이라 정차 중에만.
+     */
+    private fun serverCard() = column().apply {
+        background = round(SURFACE, 24)
+        setPadding(dp(28), dp(20), dp(28), dp(24))
+        addView(text("지금 주소: ${api.base}" + (if (prefs.getString(SERVER_CUSTOM, null) != null) " (직접 정함)" else " (기본)"), BODY, TEXT))
+        serverStatus?.let { addView(text(it, BODY_S_STRONG, if (it.startsWith("●")) ACTIVE else RECORDING).withMargin(top = 6)) }
+        val input = EditText(this@MainActivity).apply {
+            setText(api.base)
+            hint = "https://….trycloudflare.com 또는 http://192.168.0.10:8790"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, BODY.size.toFloat())
+            typeface = faces.getOrPut(BODY.font) { resources.getFont(BODY.font) }
+            setTextColor(TEXT); setHintTextColor(TEXT3)
+            maxLines = 1; isSingleLine = true
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            background = round(SURFACE, 24, TINT_PRESSED)
+            setPadding(dp(28), dp(16), dp(28), dp(16))
+            isEnabled = !driving
+        }
+        addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(100)).apply { topMargin = dp(16) })
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(button("연결 확인 후 저장", Btn.SECONDARY, Size.MEDIUM, enabled = !driving) { connectServer(input.text.toString()) }.withMargin(end = 16))
+            addView(button("기본 주소로", size = Size.MEDIUM, enabled = !driving) {
+                prefs.edit().remove(SERVER_CUSTOM).apply(); connectServer(BuildConfig.SERVER_URL, save = false)
+            })
+        }.withMargin(top = 16))
+        if (driving) addView(text("주소 입력은 정차 중에만 할 수 있어요.", BODY_S, TEXT3).withMargin(top = 10))
+    }
+
+    /** /health 로 연결을 확인하고, 되면 그 주소로 바꾼다(재생 서비스도 같은 주소를 쓰게 prefs 의 server 도). */
+    private fun connectServer(raw: String, save: Boolean = true) {
+        val url = raw.trim().trimEnd('/').let { if (it.startsWith("http://") || it.startsWith("https://")) it else "http://$it" }
+        serverStatus = "확인하는 중… $url"
+        showDeviceCheck()
+        io.execute {
+            val ok = try {
+                val c = java.net.URL("$url/health").openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 5000; c.readTimeout = 5000
+                c.responseCode == 200 && c.inputStream.bufferedReader().readText().contains("\"ok\"")
+            } catch (e: Exception) { Log.w(tag, "서버 확인 실패: $url", e); false }
+            ui.post {
+                if (ok) {
+                    api = ChajakApi(url)
+                    // 빌드 기본 주소와 같으면 "직접 정함"으로 남기지 않는다(나중에 다른 기본 주소로 빌드해도 따라가게)
+                    prefs.edit().putString("server", url).apply { if (save && url != BuildConfig.SERVER_URL) putString(SERVER_CUSTOM, url) else remove(SERVER_CUSTOM) }.apply()
+                    serverStatus = "●  연결됐어요 — 이제 이 서버로 노래를 만들어요"
+                    loadLibrary()
+                } else serverStatus = "연결하지 못했어요: $url — 주소와 서버 PC 가 켜져 있는지 확인해 주세요"
+                if (onDeviceCheck) showDeviceCheck()
+            }
+        }
     }
 
     /** 장치 하나의 소리 크기를 몇 초 잰다(저장 안 함). 화면을 떠나면 멈춘다. */
@@ -2569,6 +2652,7 @@ class MainActivity : Activity() {
         val started = System.currentTimeMillis()
         var lastVoice = 0L
         var lastRipple = 0L
+        var peak = -120.0  // 녹음 전체에서 가장 큰 소리 — 잡음 바닥(-60~-75dB)조차 없으면 마이크가 없는 것
         rec.execute {
             val sec = try {
                 recorder.record(file, total, source = if (android.os.Build.VERSION.SDK_INT >= 29) capture?.let(::captureSource) else null,
@@ -2576,6 +2660,7 @@ class MainActivity : Activity() {
                     ui.post {
                         val nowMs = System.currentTimeMillis()
                         val voiced = midi != null && db > VOICE_DB
+                        if (db > peak) peak = db
                         // 음역: 허밍만 모은다(음악 녹음은 노래 소리라 내 목소리가 아니다). 링·막대 색도 음높이를 따른다
                         if (voiced && !music) {
                             take.add(midi!!)
@@ -2588,6 +2673,7 @@ class MainActivity : Activity() {
                             if (nowMs - lastRipple > RIPPLE_EVERY_MS) { lastRipple = nowMs; ripple() }
                         }
                         setHearing(when {
+                            peak < SILENT_DB && nowMs - started > SILENT_AFTER_MS -> Hearing.NO_SIGNAL
                             nowMs - lastVoice < VOICE_HOLD_MS -> Hearing.VOICE
                             lastVoice == 0L -> Hearing.WAITING
                             nowMs - lastVoice > QUIET_MS -> Hearing.QUIET
@@ -2628,6 +2714,11 @@ class MainActivity : Activity() {
                         if (song != null) { stackMode = null; showSong(false) } else showHome()
                     }
                     sec < 0 -> showError(if (music) "음악을 녹음하지 못했어요." else "마이크를 열지 못했어요.")
+                    // 완전한 무음은 서버로 보내지 않는다 — 보내 봐야 "목소리가 들리지 않았어요(더 크게)"라는 엉뚱한 안내만 돌아온다
+                    sec >= 1 && peak < SILENT_DB -> {
+                        Log.w(tag, "완전한 무음: 가장 큰 소리 ${"%.1f".format(peak)}dB, 장치 ${inputDevice?.productName ?: "기본"}")
+                        if (capture != null) showError(NO_SIGNAL_PLAYBACK) else showError(noSignalMic(), deviceHelp = true)
+                    }
                     sec < 3 -> showError("너무 짧아요(${"%.1f".format(sec)}초). 5초 이상 ${if (music) "담아" else "흥얼거려"} 주세요.")
                     else -> {
                         if (music) keepMusicRecording(file) else rememberRange(take)
@@ -2689,7 +2780,7 @@ class MainActivity : Activity() {
                 ui.post { endPending(); showError(e.message ?: "오류가 났어요.") }
             } catch (e: Exception) {
                 Log.e(tag, "요청 실패", e)
-                ui.post { endPending(); showError("서버와 연결이 끊겼어요. 잠시 후 다시 시도해 주세요.") }
+                ui.post { endPending(); showError("서버와 연결이 끊겼어요(${api.base}). 잠시 후 다시 시도하거나, 녹음 장치 확인 화면 맨 아래 '서버 연결'에서 주소를 확인해 주세요.", deviceHelp = true) }
             }
         }
     }
@@ -3021,6 +3112,16 @@ class MainActivity : Activity() {
     }
 
     /** 아래 고정 줄: 왼쪽 · 가운데(녹음 버튼) · 오른쪽. 가운데는 화면 폭의 정확히 가운데. */
+    /** 아래 줄 위에 녹음 관련 문구를 한 줄 얹는다(녹음 버튼 바로 위, 가운데). message 가 없으면 아래 줄만. */
+    private fun LinearLayout.aboveButton(message: CharSequence?, color: Int = TEXT3, row: LinearLayout.() -> Unit) {
+        if (message.isNullOrEmpty()) return row()
+        orientation = LinearLayout.VERTICAL
+        addView(text(message.toString(), BODY, color).apply { gravity = Gravity.CENTER },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(16) })
+        addView(LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; row() },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
     private fun LinearLayout.zones(left: View?, center: List<View>, right: View? = null) {
         fun side(v: View?, g: Int) = FrameLayout(this@MainActivity).apply {
             if (v != null) addView(v, FrameLayout.LayoutParams(v.layoutParams?.width ?: ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -3090,6 +3191,8 @@ class MainActivity : Activity() {
     /** 녹음 중 소리 상태: 아직 안 들림 · 흥얼거림이 들림 · 들리다가 조용해짐. */
     enum class Hearing(val message: String, val music: String) {
         WAITING("흥얼거려 보세요. 잘 들리면 버튼 둘레가 반응해요.", "음악을 틀어 주세요. 소리가 들어오면 버튼 둘레가 반응해요."),
+        /** 잡음조차 없는 완전한 무음 — 흥얼거림이 작은 게 아니라 마이크가 없거나 다른 장치가 골라졌다(2026-11-09: PC 에 마이크가 없을 때 "더 크게"라고 안내했다). */
+        NO_SIGNAL("마이크에서 소리가 전혀 들어오지 않아요. 녹음 장치 연결을 확인해 주세요.", "소리가 전혀 들어오지 않아요. 음악이 재생 중인지 확인해 주세요."),
         VOICE("●  잘 들려요", "●  음악이 들어오고 있어요"),
         QUIET("조용해졌어요. 다 불렀으면 가운데 버튼을 누르세요.", "음악이 멈췄어요. 원하는 부분을 다 담았으면 가운데 버튼을 누르세요."),
     }
@@ -3129,6 +3232,12 @@ class MainActivity : Activity() {
         const val VOICE_DB = -50.0
         const val VOICE_HOLD_MS = 400L
         const val QUIET_MS = 1500L
+        /** 앱에서 직접 정한 서버 주소(prefs). 없으면 빌드 기본값. */
+        const val SERVER_CUSTOM = "server_custom"
+        /** 완전한 무음 판단: 녹음 내내 이보다 작으면(실제 마이크는 조용한 방에서도 -60~-75dB 잡음이 있다) · 시작 후 이만큼 지나서 안내. */
+        const val SILENT_DB = -85.0
+        const val SILENT_AFTER_MS = 2500L
+        const val NO_SIGNAL_PLAYBACK = "재생 소리가 전혀 들어오지 않았어요. 음악이 재생 중일 때 다시 담아 주세요."
         /** 흥얼거림이 들릴 때 녹음 버튼 둘레로 퍼지는 고리: 퍼지는 시간 · 새 고리 간격. */
         const val RIPPLE_MS = 700L
         const val RIPPLE_EVERY_MS = 350L
