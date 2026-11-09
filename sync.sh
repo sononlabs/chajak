@@ -15,6 +15,6 @@ copy() {  # copy <원본> <대상> <제외…>
 }
 
 copy "$APP" "$here/app" build .gradle .kotlin local.properties '*.iml' .idea .probe
-copy "$SERVER" "$here/server" storage test_output __pycache__ '*.pyc'
+copy "$SERVER" "$here/server" storage test_output __pycache__ '*.pyc' '*.log'
 copy "$NODE" "$here/comfyui-node/pleos_melody_instrument" __pycache__ '*.pyc'
 echo "동기화 끝: app · server · comfyui-node"
