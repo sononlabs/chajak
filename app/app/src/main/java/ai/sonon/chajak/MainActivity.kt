@@ -138,8 +138,8 @@ class MainActivity : Activity() {
         val open = intent.getStringExtra("song")
         when {
             open != null -> { showHome(); openSong(open) }  // 시험·시연용: am start --es song <id>
-            prefs.getBoolean(TUTORIAL_SEEN, false) -> showHome()
-            else -> showTutorial()
+            // 흥얼거리기 요령은 뺐다(2026-11-10 사용자) — 처음에도 바로 녹음실
+            else -> showHome()
         }
         handleGleo(intent)
     }
@@ -327,7 +327,8 @@ class MainActivity : Activity() {
      * 화면 = [왼쪽 탭] + 위 내용(스크롤) + 아래 고정 동작 줄. 녹음 버튼은 어느 화면에서나 아래 가운데 같은 자리에 있다.
      * tabs: 큰 화면(녹음실·곡·목록·노래 듣기)에만 왼쪽 탭을 둔다. 카운트다운·녹음 중·오류 화면에는 없다(녹음 중 딴 데로 새지 않게).
      */
-    private fun show(build: LinearLayout.() -> Unit, again: () -> Unit, tabs: Boolean = false, bar: (LinearLayout.() -> Unit)? = null) {
+    private fun show(build: LinearLayout.() -> Unit, again: () -> Unit, tabs: Boolean = false,
+                     header: (LinearLayout.() -> Unit)? = null, bar: (LinearLayout.() -> Unit)? = null) {
         // 같은 화면을 다시 그릴 때(상태 갱신·목록 새로 받기·주행 전환·장치 연결 등)는 스크롤 위치를 지킨다 — 2026-11-08 버그:
         // 스크롤을 내려 두면 갱신될 때마다 맨 위로 튀었다. 화면 종류는 again 의 클래스로 본다(같은 자리의 람다·함수 참조는 같은 클래스)
         val keepY = if (current.javaClass == again.javaClass) scroller?.scrollY ?: 0 else 0
@@ -339,12 +340,18 @@ class MainActivity : Activity() {
         onList = false
         onDeviceCheck = false
         onSettings = false
+        onPlayer = false
         homeFinalBar = null
         homeFinalText = null
         root.removeAllViews()
         val page = column()
+        // 고정 머리: 목록 화면의 제목·보기 바꾸기는 스크롤해도 그대로(2026-11-10 사용자)
+        if (header != null) page.addView(column().apply {
+            setPadding(dp(PAGE_H), dp(PAGE_V), dp(PAGE_H), dp(12))
+            try { header() } catch (e: Exception) { Log.e(this@MainActivity.tag, "머리를 그리지 못함", e) }
+        })
         val col = column().apply {
-            setPadding(dp(PAGE_H), dp(PAGE_V), dp(PAGE_H), dp(PAGE_V))
+            setPadding(dp(PAGE_H), if (header != null) dp(4) else dp(PAGE_V), dp(PAGE_H), dp(PAGE_V))
             // 서버 응답에 필드가 빠졌거나(옛 곡 등) 형식이 다르면 여기서 막는다 — ui.post 안의 예외는 io 의 try 로 못 잡는다
             try {
                 build()
@@ -355,7 +362,7 @@ class MainActivity : Activity() {
                 addView(body("곡 정보가 일부 비어 있어요. 왼쪽 탭에서 다른 곡을 열거나 새로 흥얼거려 주세요."))
             }
         }
-        val sv = ScrollView(this).apply { addView(col) }
+        val sv = NoJumpScrollView(this).apply { addView(col) }
         scroller = sv
         if (keepY > 0) sv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
@@ -381,9 +388,56 @@ class MainActivity : Activity() {
             addView(if (tabs) tabRail() else View(this@MainActivity).apply { setBackgroundColor(SURFACE) },
                     LinearLayout.LayoutParams(dp(TAB_W), ViewGroup.LayoutParams.MATCH_PARENT))
             addView(View(this@MainActivity).apply { setBackgroundColor(TINT_PRESSED) }, LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
-            addView(page, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            addView(FrameLayout(this@MainActivity).apply {
+                addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                miniPlayer()?.let { addView(it, FrameLayout.LayoutParams(dp(MINI_W), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
+                    topMargin = dp(16); marginEnd = dp(24)
+                }) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         })
     }
+
+    /** 지금 듣는 완성 노래(미니 플레이어용): 곡 id · 버전 id · 제목 · 표지 주소. */
+    private var nowPlaying: JSONObject? = null
+
+    /**
+     * 노래를 틀어 둔 채 다른 화면으로 가면 오른쪽 위에 뜨는 작은 재생 칸(2026-11-10 사용자).
+     * 표지 · 제목 · 일시정지/재생 · 열기 · 끄기. 그 노래의 노래 듣기 화면에서는 띄우지 않는다. 녹음을 시작하면 재생이 멈춰 같이 사라진다.
+     */
+    private fun miniPlayer(): View? {
+        val np = nowPlaying ?: return null
+        val key = playing ?: return null
+        if (!key.startsWith("final:") || key.removePrefix("final:") != np.optString("version")) return null
+        if (onPlayer) return null
+        if (recording || counting) return null
+        val p = activePlayer
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = round(SURFACE, 24, TINT_PRESSED)
+            elevation = dp(8).toFloat()
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            addView(ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP; background = round(TINT, 12); clipToOutline = true
+                np.optString("cover").takeIf { it.isNotEmpty() }?.let { loadCover(it, COVER_SMALL) { b -> setImageBitmap(b) } }
+            }, LinearLayout.LayoutParams(dp(72), dp(72)).apply { marginEnd = dp(16) })
+            addView(column().apply {
+                addView(text(np.optString("title"), BODY_STRONG, TEXT).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                addView(text(if (p?.isPlaying == true) "재생 중" else "일시정지", BODY_S, TEXT3))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(iconButton(if (p?.isPlaying == true) "⏸" else "▶", if (p?.isPlaying == true) "일시정지" else "재생") {
+                activePlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                ui.postDelayed({ if (active) refresh() }, 150)
+            })
+            addView(iconButton("↗", "노래 듣기 화면 열기") {
+                playerVersion = np.optString("version"); openSong(np.optString("song"), player = true)
+            })
+            addView(iconButton("✕", "재생 끄기") { stopPlayback(); refresh() })
+        }
+    }
+
+    /** 지금 화면이 노래 듣기 화면인지(미니 플레이어를 띄우지 않는다). */
+    private var onPlayer = false
 
     // ------------------------------------------------------------------ 왼쪽 탭
 
@@ -489,11 +543,6 @@ class MainActivity : Activity() {
             addView(label("녹음한 소리"))
             addView(voiceFacts(music = false).withMargin(fill = true))
 
-            addView(label("도움말"))
-            addView(LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                addView(button("흥얼거리기 요령", size = Size.MEDIUM) { showTutorial() })
-            })
 
             addView(label("앱 정보"))
             addView(text("차작 ${BuildConfig.VERSION_NAME} · 서버 ${api.base}", BODY, TEXT2))
@@ -518,13 +567,30 @@ class MainActivity : Activity() {
     /** 탭 2 · 내 노래: 완성된 노래를 드라이브 앨범(만든 때 — 출근길·퇴근길·밤·주말…)으로 묶어 보여 준다. 누르면 노래 듣기. */
     private fun showMusicList() {
         val songs = library.filter { !it.isNull("title") }
+        val tiles = prefs.getString(MUSIC_VIEW, "tile") != "list"
         show({
             onList = true
-            addView(headline("내 노래"))
-            addView(body(if (songs.isEmpty()) "아직 완성된 노래가 없어요. 녹음실에서 흥얼거리고 노래 만들기를 눌러 보세요."
-                         else "완성된 노래 ${songs.size}곡 · 만든 드라이브별 앨범"))
             songs.groupBy { DriveTheme.momentOf(it.optString("created")) }.forEach { (moment, list) ->
             addView(label("$moment 앨범 · ${list.size}곡"))
+            if (!tiles) {  // 리스트형: 한 줄에 한 곡(작은 표지 · 제목 · 길이·조성·날짜)
+                list.forEach { item ->
+                    val id = item.getString("id")
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        background = pressable(round(SURFACE, 24), round(TINT, 24))
+                        setPadding(dp(20), dp(14), dp(28), dp(14))
+                        setOnClickListener { openSong(id, player = true) }
+                        addView(thumb(item), LinearLayout.LayoutParams(dp(88), dp(88)).apply { marginEnd = dp(24) })
+                        addView(column().apply {
+                            addView(text(item.getString("title"), BODY_STRONG, TEXT).apply { maxLines = 1 })
+                            addView(text("${clock(item.optDouble("final_sec", 0.0).toFloat())} · ${keyOf(item)} · ${dateOf(item)}", BODY_S, TEXT3).withMargin(top = 4))
+                        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(text("▶", TITLE, TEXT3))
+                    }.withMargin(bottom = 12, fill = true))
+                }
+                return@forEach
+            }
             addView(grid(list.map { item ->
                 val id = item.getString("id")
                 column().apply {
@@ -537,16 +603,19 @@ class MainActivity : Activity() {
                 }
             }, 4).withMargin(fill = true))
             }
-        }, ::showMusicList, tabs = true)
+        }, ::showMusicList, tabs = true, header = {
+            addView(titleRow(headline("내 노래"), segmented(listOf("타일", "리스트"), if (tiles) 0 else 1, width = 360) {
+                prefs.edit().putString(MUSIC_VIEW, if (it == 0) "tile" else "list").apply(); showMusicList()
+            }))
+            addView(body(if (songs.isEmpty()) "아직 완성된 노래가 없어요. 녹음실에서 흥얼거리고 노래 만들기를 눌러 보세요."
+                         else "완성된 노래 ${songs.size}곡 · 만든 드라이브별 앨범"))
+        })
     }
 
     /** 탭 3 · 허밍 리스트: 음표로 바꾼 내 멜로디(곡)들. 누르면 곡 화면(트랙·음표 보기·변주). */
     private fun showMelodyList() {
         show({
             onList = true
-            addView(titleRow(headline("내 멜로디"), button("음악 녹음 보관함 ›", size = Size.MEDIUM) { showMusicLibrary() }))
-            addView(body(if (library.isEmpty()) "아직 만든 멜로디가 없어요. 녹음실에서 흥얼거려 보세요."
-                         else "음표로 바꾼 내 멜로디 ${if (library.size >= LIBRARY_SIZE) "최근 " else ""}${library.size}개 · 눌러서 트랙·음표 보기"))
             library.forEach { item ->
                 val id = item.getString("id")
                 addView(LinearLayout(this@MainActivity).apply {
@@ -568,7 +637,11 @@ class MainActivity : Activity() {
                     addView(text("›", TITLE, TEXT3))
                 }.withMargin(top = 16, fill = true))
             }
-        }, ::showMelodyList, tabs = true)
+        }, ::showMelodyList, tabs = true, header = {
+            addView(titleRow(headline("내 멜로디"), button("음악 녹음 보관함 ›", size = Size.MEDIUM) { showMusicLibrary() }))
+            addView(body(if (library.isEmpty()) "아직 만든 멜로디가 없어요. 녹음실에서 흥얼거려 보세요."
+                         else "음표로 바꾼 내 멜로디 ${if (library.size >= LIBRARY_SIZE) "최근 " else ""}${library.size}개 · 눌러서 트랙·음표 보기"))
+        })
     }
 
     /** 멜로디 성격 칩: "♪ 쓸쓸한 멜로디 ●●○○○ 에너지 28" + 아래에 이유 한 줄. 읽기만(주행 중에도 조작 없음). */
@@ -645,7 +718,7 @@ class MainActivity : Activity() {
             }
         }, ::showHome, tabs = true) {
             aboveButton(notice?.also { notice = null }, TEXT) { zones(
-                if (stacking) button("내 멜로디로") { stackMode = null; showSong(false) } else button("흥얼거리기 요령") { showTutorial() },
+                if (stacking) button("내 멜로디로") { stackMode = null; showSong(false) } else null,
                 listOf(if (!canRecord) recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null)
                        else recordButton(Rec.READY, "녹음 시작") { startRecording() }),
                 if (testInputs.isNotEmpty()) text("시험 모드 · 마이크 대신\n${testInputs[testIndex % testInputs.size]}", BODY_S, POSITIVE)
@@ -2020,9 +2093,12 @@ class MainActivity : Activity() {
         val f = finals.firstOrNull { it.optString("id") == playerVersion } ?: s.optJSONObject("final") ?: return showSong(false)
         val total = f.optDouble("duration_sec", 0.0).toFloat().coerceAtLeast(1f)
         val key = "final:" + f.optString("id")
+        val meta = JSONObject().put("song", s.optString("id")).put("version", f.optString("id")).put("title", f.optString("title"))
+            .put("cover", f.optString("cover_url"))
         lateinit var seek: SeekBar
         lateinit var time: TextView
         show({
+            onPlayer = true
             addView(steps(3, done = true))
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -2071,23 +2147,7 @@ class MainActivity : Activity() {
                         if (m.optBoolean("genre_applied", true)) m.optString("genre") else "분위기").withMargin(top = 4))
                 }
                 f.optString("edit_summary").takeIf { it.isNotEmpty() && it != "null" }?.let { col.addView(text("✦ 이번 버전: $it", BODY_S, POSITIVE).withMargin(top = 4)) }
-                seek = SeekBar(this@MainActivity).apply {
-                    contentDescription = "재생 위치"
-                    max = 1000
-                    progressTintList = ColorStateList.valueOf(POSITIVE)
-                    progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
-                    smallThumb(POSITIVE)
-                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                        override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {}
-                        override fun onStartTrackingTouch(b: SeekBar?) {}
-                        override fun onStopTrackingTouch(b: SeekBar?) {
-                            if (playing == key && prepared) activePlayer?.seekTo((progress / 1000f * total * 1000).toLong())
-                        }
-                    })
-                }
-                col.addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(24) })
-                time = text("0:00 / ${clock(total)}", BODY_S_STRONG, TEXT3)
-                col.addView(time)
+                // 재생 위치 막대·시간은 아래 줄에서 재생 버튼과 함께(2026-11-10 사용자: "재생 관련된 건 하단 바에 함께")
                 // 다시 만들기 한 곳: 말로 바꾸기 + AI 제안 단추 + 세부 설정(접힘)
                 if (finalJob == null) {
                     col.addView(label("다시 만들기 · 마음에 안 드는 점을 말하거나 제안을 누르세요"))
@@ -2142,17 +2202,45 @@ class MainActivity : Activity() {
                 addView(col, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             })
         }, { showPlayer(false) }, tabs = true) {
-            zones(button("← 내 멜로디") { showSong(false) },
-                listOf(button(if (playing == key) "■  멈춤" else "▶  노래 듣기", Btn.SECONDARY) { toggle(key, f.getString("audio_url")) }),
-                button("처음부터") { stopPlayback(); toggle(key, f.getString("audio_url")) })
+            // 아래 줄: 위에 재생 위치 막대(지난 시간 · 막대 · 전체 시간), 그 아래 ← 내 멜로디 · 재생 · 처음부터
+            orientation = LinearLayout.VERTICAL
+            time = text("0:00", BODY_S_STRONG, TEXT2)
+            seek = SeekBar(this@MainActivity).apply {
+                contentDescription = "재생 위치"
+                max = 1000
+                progressTintList = ColorStateList.valueOf(POSITIVE)
+                progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
+                smallThumb(POSITIVE)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {}
+                    override fun onStartTrackingTouch(b: SeekBar?) {}
+                    override fun onStopTrackingTouch(b: SeekBar?) {
+                        if (playing == key && prepared) activePlayer?.seekTo((progress / 1000f * total * 1000).toLong())
+                    }
+                })
+            }
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(time, LinearLayout.LayoutParams(dp(88), ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(seek, LinearLayout.LayoutParams(0, dp(56), 1f))
+                addView(text(clock(total), BODY_S_STRONG, TEXT3).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(dp(88), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                zones(button("← 내 멜로디") { showSong(false) },
+                    listOf(button(if (playing == key) "■  멈춤" else "▶  노래 듣기", Btn.SECONDARY) { nowPlaying = meta; toggle(key, f.getString("audio_url")) }),
+                    button("처음부터") { stopPlayback(); nowPlaying = meta; toggle(key, f.getString("audio_url")) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        if (autoplay) toggle(key, f.getString("audio_url"))
+        if (autoplay) { nowPlaying = meta; toggle(key, f.getString("audio_url")) }
         val token = scoreToken
         fun tick() {
             if (token != scoreToken) return
             val pos = if (playing == key && prepared) (activePlayer?.currentPosition ?: 0) / 1000f else 0f
             if (!seek.isPressed) seek.progress = (pos / total * 1000).toInt()
-            time.text = "${clock(pos)} / ${clock(total)}"
+            time.text = clock(pos)
             // 지금 부르는 줄만 빨갛게, 지난 줄은 진하게, 남은 줄은 옅게(구간 사이 간주에는 빨간 줄 없음)
             nowLine?.text = lyricViews.firstOrNull { pos >= it.start && pos < it.end }?.view?.text ?: "♪"
             lyricViews.forEach { l ->
@@ -2423,19 +2511,55 @@ class MainActivity : Activity() {
 
     private fun showMusicLibrary() {
         val files = musicFiles()
+        var bar: SeekBar? = null
+        var now: TextView? = null
+        var nowTotal = 1f
         show({
-            addView(headline("음악 녹음 보관함"))
-            addView(body("음악 녹음 버튼으로 담아 둔 소리예요. ${files.size}개 보관 중 · 멜로디로 만들면 허밍처럼 트랙이 돼요."))
             if (files.isEmpty()) addView(body("빨간 녹음 버튼 오른쪽의 작은 ‘음악 녹음’ 버튼으로 첫 소리를 담아 보세요.").withMargin(top = 24))
-            else if (!driving) addView(caption("지울 녹음은 왼쪽으로 밀어 삭제를 누르세요.", TEXT3))
             files.forEach { file ->
                 val key = "recording:${file.name}"
                 val duration = (file.length() - 44) / 96000f
                 val date = java.text.SimpleDateFormat("MM.dd HH:mm", java.util.Locale.KOREA).format(java.util.Date(file.lastModified()))
+                val name = prefs.getString(REC_NAME + file.name, null)
                 val box = column().apply {
                     background = round(SURFACE, 24)
                     setPadding(dp(24), dp(16), dp(24), dp(16))
-                    addView(text("$date · ${clock(duration)}", BODY_STRONG, TEXT))
+                    addView(LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        addView(column().apply {
+                            addView(text(name ?: "$date 녹음", BODY_STRONG, TEXT).apply { maxLines = 1 })
+                            addView(text(if (name != null) "$date · ${clock(duration)}" else clock(duration), BODY_S, TEXT3).withMargin(top = 2))
+                        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        // 이름 바꾸기(2026-11-10 사용자) — 글자 입력이라 정차 중에만
+                        addView(button("✎ 이름", size = Size.MEDIUM, enabled = !driving) { renameRecording(file, name ?: "$date 녹음") })
+                    })
+                    // 듣는 중이면 칸 안에 재생 위치 막대(2026-11-10 사용자: "슬롯 안에 프로그래스바가 없어 불편")
+                    if (playing == key) {
+                        nowTotal = duration.coerceAtLeast(1f)
+                        now = text("0:00", BODY_S_STRONG, TEXT2)
+                        bar = SeekBar(this@MainActivity).apply {
+                            contentDescription = "녹음 재생 위치"
+                            max = 1000
+                            progressTintList = ColorStateList.valueOf(POSITIVE)
+                            progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
+                            smallThumb(POSITIVE)
+                            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                                override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {}
+                                override fun onStartTrackingTouch(b: SeekBar?) {}
+                                override fun onStopTrackingTouch(b: SeekBar?) {
+                                    if (playing == key && prepared) activePlayer?.seekTo((progress / 1000f * nowTotal * 1000).toLong())
+                                }
+                            })
+                        }
+                        addView(LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = Gravity.CENTER_VERTICAL
+                            addView(now, LinearLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.WRAP_CONTENT))
+                            addView(bar, LinearLayout.LayoutParams(0, dp(48), 1f))
+                            addView(text(clock(duration), BODY_S_STRONG, TEXT3).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.WRAP_CONTENT))
+                        }.withMargin(top = 8))
+                    }
                     addView(row(
                         button(if (playing == key) "■ 멈춤" else "▶ 녹음 듣기", size = Size.MEDIUM) { toggle(key, file.absolutePath) },
                         button("파일로 저장", size = Size.MEDIUM, enabled = !driving) { exportRecording(file) },
@@ -2454,15 +2578,50 @@ class MainActivity : Activity() {
                 addView(SwipeRow(this@MainActivity, box, delete, dp(180)).apply { enabledSwipe = !driving }
                     .withMargin(top = 16, fill = true))
             }
-        }, ::showMusicLibrary, tabs = true) {
+        }, ::showMusicLibrary, tabs = true, header = {
+            addView(headline("음악 녹음 보관함"))
+            addView(body("음악 녹음 버튼으로 담아 둔 소리예요. ${files.size}개 보관 중 · 멜로디로 만들면 허밍처럼 트랙이 돼요."))
+            if (files.isNotEmpty() && !driving) addView(caption("지울 녹음은 왼쪽으로 밀어 삭제를 누르세요.", TEXT3))
+        }) {
             zones(button("홈으로") { showHome() }, listOf(musicRecordButton(!driving)))
         }
+        val token = scoreToken
+        fun tick() {
+            if (token != scoreToken) return
+            val b = bar ?: return
+            val pos = if (prepared) (activePlayer?.currentPosition ?: 0) / 1000f else 0f
+            if (!b.isPressed) b.progress = (pos / nowTotal * 1000).toInt().coerceIn(0, 1000)
+            now?.text = clock(pos)
+            ui.postDelayed({ tick() }, 250)
+        }
+        tick()
+    }
+
+    /** 음악 녹음 이름 바꾸기(파일은 그대로, 이름은 기기 설정에). 비우면 날짜 이름으로 돌아간다. */
+    private fun renameRecording(file: File, current: String) {
+        if (driving) return
+        val input = EditText(this).apply {
+            setText(current); setSelection(current.length)
+            maxLines = 1; isSingleLine = true
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, BODY.size.toFloat())
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("녹음 이름")
+            .setView(LinearLayout(this).apply { setPadding(dp(32), dp(8), dp(32), 0); addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) })
+            .setPositiveButton("저장") { _, _ ->
+                val v = input.text.toString().trim().take(40)
+                prefs.edit().apply { if (v.isEmpty()) remove(REC_NAME + file.name) else putString(REC_NAME + file.name, v) }.apply()
+                showMusicLibrary()
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     private fun deleteRecording(file: File, key: String) {
         if (driving) return
         if (playing == key) stopPlayback()
         if (!file.delete()) return showError("녹음을 지우지 못했어요.")
+        prefs.edit().remove(REC_NAME + file.name).apply()
         Log.i(tag, "음악 녹음 삭제: ${file.name}")
         showMusicLibrary()
     }
@@ -3720,6 +3879,12 @@ class MainActivity : Activity() {
         const val TAB_W = 232
         const val TAB_H = 168
         const val TAB_GAP = 32
+        /** 미니 플레이어 폭. */
+        const val MINI_W = 560
+        /** 내 노래 보기 방식(tile·list). */
+        const val MUSIC_VIEW = "music_view"
+        /** 음악 녹음 이름(prefs 키 앞부분 + 파일 이름). */
+        const val REC_NAME = "rec_name:"
         /** 슬라이더 손잡이 지름. */
         const val THUMB = 28
         /** 표지 받는 크기(px): 목록 칸 · 만드는 중 작은 칸 · 노래 듣기 큰 표지. */

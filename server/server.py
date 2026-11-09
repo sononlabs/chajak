@@ -27,6 +27,7 @@ import melody_ai
 import melody_mood
 import melody_notes
 import talk as T
+import lyricfit
 
 STORAGE = Path(__file__).parent / "storage"
 SR = 44100
@@ -642,6 +643,11 @@ async def _run_final(app, job: dict, song: dict):
                 src, _ = await melody_ai.rewrite(src, seed)
             out = await cf.run(C.song_form_graph(src, opts["seconds"], sung))
             abc, plan = C.text(out, "abc_out"), json.loads(C.text(out, "plan_out"))
+        if sung:  # 가사 줄 = 멜로디 프레이즈(쉼표로 나눈 구간), 줄마다 음표 수를 글자 수 목표로(2마디씩 자르던 것 대신)
+            try:
+                lyricfit.phrases(abc, plan)
+            except Exception as e:
+                print("프레이즈 나누기 실패(2마디 기준 그대로):", e)
         mood = _melody_mood(src, first) if opts.get("follow_mood", True) else None
         job["mood"] = _mood_view(mood)
         job.update(stage="lyrics", eta_sec=FINAL_ETA(plan["seconds"]), seconds=plan["seconds"])
@@ -659,6 +665,11 @@ async def _run_final(app, job: dict, song: dict):
             words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
             if mood and words["cover"]:
                 words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
+        if sung:  # 가사가 정해지면 줄마다 음표 수 = 한글 글자 수로 맞춘다(다음 줄 글자를 당겨 부르지 않게)
+            try:
+                abc, job["lyric_fit"] = lyricfit.fit(abc, plan, words["sections"])
+            except Exception as e:
+                print("가사-음표 맞추기 실패(원래 악보로):", e)
         text = lyrics.yue_lyrics(plan, words["sections"]) if sung else "[Instrumental]"
         style = _style(remix["style"] or words["style"], opts["voice"])
         # 만드는 동안 먼저 보여 줄 것(첫 결과가 준비되면 알린다) — 노래를 기다리는 3분이 덜 지루하게
@@ -720,38 +731,108 @@ async def final_cover(request):
     return await _cover_response(request, d / f.get("cover", "cover.png"))
 
 
+TALK_TTL_SEC = 3600
+
+
+def _json_ok(obj, status=200):
+    return web.json_response(obj, status=status, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
 async def talk_upload(request):
-    """대화로 가사 만들기(저니맵 02): multipart audio(차 안 대화, 30분까지 · wav·m4a·mp3) + direction(그대로·통쾌하게·담담하게·유쾌하게).
-    → 받아쓰기 + 노래 이야기 정리 {transcript, lines, seconds, enough, theme, story, feeling, phrases, title, direction}.
-    녹음 파일은 저장하지 않는다(받아쓰고 나면 버린다)."""
+    """대화로 가사 만들기(저니맵 02) — 분석 작업 시작. multipart audio(차 안 대화, 30분까지 · wav·m4a·mp3) + direction.
+    → 202 {id}. 진행·결과는 GET /v1/talk/{id}. 대화는 서버에 보관하지 않는다: 녹음 파일은 받아쓰고 버리고,
+    결과(받아쓴 글·정리)는 메모리에만 1시간 두었다가 지운다(작업 파일 jobs.json 에도 안 쓴다). 보관은 앱이 한다."""
     data, filename, fields = await _form(request)
     direction = fields.get("direction") or "그대로"
     if direction not in T.FEELINGS:
         raise ApiError(400, "BAD_OPTION", f"direction 값은 {list(T.FEELINGS)} 중 하나여야 해요.")
-    try:  # wav·m4a·mp3 모두(PyAV). 15분 대화 푸는 데 약 0.5초
-        seconds = len(await asyncio.get_running_loop().run_in_executor(None, T.decode, data)) / 16000
-    except Exception:
-        raise ApiError(400, "BAD_AUDIO", "녹음 파일을 읽지 못했어요. 다시 녹음해 주세요.")
-    if seconds > T.MAX_TALK_SEC:
-        raise ApiError(413, "TOO_LONG", f"대화 녹음은 {T.MAX_TALK_SEC // 60}분까지예요.")
-    t0 = time.perf_counter()
+    jobs = request.app["talk_jobs"]
+    now = time.time()
+    for k in [k for k, j in jobs.items() if now - j["created"] > TALK_TTL_SEC]:
+        jobs.pop(k, None)
+    tid = uuid.uuid4().hex[:12]
+    jobs[tid] = {"id": tid, "status": "running", "stage": "decode", "direction": direction, "created": now, "eta_sec": 30}
+    request.app["ai_tasks"].add(asyncio.create_task(_run_talk(request.app, tid, data, direction)))
+    return _json_ok({"id": tid, "status": "running", "stage": "decode"}, status=202)
+
+
+async def _run_talk(app, tid: str, data: bytes, direction: str):
+    job = app["talk_jobs"][tid]
     try:
-        heard = await T.transcribe(data)
+        try:  # wav·m4a·mp3 모두(PyAV). 15분 대화 푸는 데 약 0.5초
+            seconds = len(await asyncio.get_running_loop().run_in_executor(None, T.decode, data)) / 16000
+        except Exception:
+            raise ApiError(400, "BAD_AUDIO", "녹음 파일을 읽지 못했어요. 다시 녹음해 주세요.")
+        if seconds > T.MAX_TALK_SEC + 5:
+            raise ApiError(413, "TOO_LONG", f"대화 녹음은 {T.MAX_TALK_SEC // 60}분까지예요.")
+        # 받아쓰기는 GPU 로 15분이 약 20초, 정리 약 10초. GPU 를 노래가 쓰고 있으면 CPU 라 더 걸린다
+        job.update(stage="stt", seconds=round(seconds, 1), eta_sec=round(20 + seconds / 8))
+        t0 = time.perf_counter()
+        try:
+            heard = await T.transcribe(data)
+        except Exception as e:
+            if "snapshot" in str(e) or "local_files_only" in str(e) or "No such file" in str(e):
+                raise ApiError(503, "STT_UNAVAILABLE", "받아쓰기 모델이 서버에 아직 없어요. 서버 PC 에서 faster-whisper 모델을 받아 주세요.")
+            raise
+        del data
+        if len(heard["text"].replace(" ", "")) < 8:
+            raise ApiError(422, "TALK_EMPTY", "말소리가 거의 들리지 않았어요. 마이크 가까이에서 다시 이야기해 주세요.")
+        t1 = time.perf_counter()
+        job["stage"] = "digest"
+        try:
+            story = await T.digest(heard["text"], direction, lines=heard["lines"])
+        except T.DigestError as e:
+            raise ApiError(502, "TALK_DIGEST_FAILED", f"{e} 잠시 후 다시 시도해 주세요.")
+        names = story.pop("_names", [])
+        lines = [T._mask(l, names) for l in heard["lines"]]  # 앱에 보관될 받아쓴 글도 이름을 가린다
+        job["result"] = {"transcript": " ".join(lines), "lines": lines, "seconds": heard["seconds"], **story,
+                         "timing": {"stt_sec": round(t1 - t0, 1), "digest_sec": round(time.perf_counter() - t1, 1), "stt_device": heard["device"]}}
+        job.update(status="done", stage="done")
+    except ApiError as e:
+        job.update(status="error", error_code=e.code, error=e.message)
     except Exception as e:
-        if "snapshot" in str(e) or "local_files_only" in str(e) or "No such file" in str(e):
-            raise ApiError(503, "STT_UNAVAILABLE", "받아쓰기 모델이 서버에 아직 없어요. 서버 PC 에서 faster-whisper 모델을 받아 주세요.")
-        raise
-    del data
-    if len(heard["text"].replace(" ", "")) < 8:
-        raise ApiError(422, "TALK_EMPTY", "말소리가 거의 들리지 않았어요. 마이크 가까이에서 다시 이야기해 주세요.")
-    t1 = time.perf_counter()
+        job.update(status="error", error_code="SERVER_ERROR", error=f"대화를 분석하지 못했어요: {e}")
+
+
+async def talk_status(request):
+    job = request.app["talk_jobs"].get(request.match_info["talk_id"])
+    if job is None:
+        raise ApiError(404, "NOT_FOUND", "분석 작업을 찾을 수 없어요(1시간이 지나 지웠거나 서버를 다시 켰어요). 다시 녹음해 주세요.")
+    return _json_ok({k: v for k, v in job.items() if k != "created"})
+
+
+async def talk_digest(request):
+    """보관한 대화를 다른 방향으로 다시 정리: JSON {lines: [...], direction}. 받아쓰기 없이 약 10초."""
+    body = await _json(request)
+    direction = body.get("direction") or "그대로"
+    if direction not in T.FEELINGS:
+        raise ApiError(400, "BAD_OPTION", f"direction 값은 {list(T.FEELINGS)} 중 하나여야 해요.")
+    lines = [str(l)[:500] for l in (body.get("lines") or []) if str(l).strip()][:2000]
+    if not lines:
+        raise ApiError(400, "BAD_OPTION", "lines(받아쓴 줄 목록)가 필요해요.")
     try:
-        story = await T.digest(heard["text"], direction, lines=heard["lines"])
+        story = await T.digest(" ".join(lines), direction, lines=lines)
     except T.DigestError as e:
         raise ApiError(502, "TALK_DIGEST_FAILED", f"{e} 잠시 후 다시 시도해 주세요.")
-    return web.json_response({"transcript": heard["text"], "lines": heard["lines"], "seconds": heard["seconds"], **story,
-                              "timing": {"stt_sec": round(t1 - t0, 1), "digest_sec": round(time.perf_counter() - t1, 1), "stt_device": heard["device"]}},
-                             dumps=lambda o: json.dumps(o, ensure_ascii=False))
+    story.pop("_names", None)
+    return _json_ok(story)
+
+
+async def song_form(request):
+    """곡 구성 미리보기(플로우 1 '가사 구간 판정 → 구간별 길이 추정'): ?seconds=60|120|180.
+    → {seconds, tempo, key, sections: [{name, bars, sung, start_sec, syllables: [줄마다 음표 수 = 글자 수 목표]}]}.
+    노래 만들기와 같은 곡 구성 노드를 1번 트랙 멜로디로 돌린다(멜로디 반영을 낮춰 AI 가 다시 쓰면 실제 구성은 달라질 수 있다)."""
+    store: Store = request.app["store"]
+    song = store.load(request.match_info["song_id"])
+    try:
+        seconds = float(min(180, max(60, float(request.query.get("seconds", FINAL_SECONDS)))))
+    except ValueError:
+        raise ApiError(400, "BAD_OPTION", "seconds 는 60~180 숫자여야 해요.")
+    if not song.get("tracks"):
+        raise ApiError(409, "NO_MELODY", "이 곡에는 멜로디가 없어요.")
+    out = await request.app["comfy"].run(C.song_form_graph(song["tracks"][0]["abc"], seconds, True), front=True)
+    plan = json.loads(C.text(out, "plan_out"))
+    return _json_ok({k: plan[k] for k in ("seconds", "tempo", "key", "sections") if k in plan})
 
 
 async def get_job(request):
@@ -838,6 +919,7 @@ def make_app(comfy_url: str) -> web.Application:
     app["comfy"] = C.Comfy(comfy_url)
     app["jobs"] = _load_jobs()
     app["ai_tasks"] = set()
+    app["talk_jobs"] = {}  # 대화 분석 작업(메모리에만, 1시간)
 
     async def on_start(app):
         await app["comfy"].start()
@@ -877,6 +959,9 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/hum", hum_audio),
         web.get("/v1/themes", themes),
         web.post("/v1/talk", talk_upload),
+        web.get("/v1/talk/{talk_id}", talk_status),
+        web.post("/v1/talk/digest", talk_digest),
+        web.get("/v1/songs/{song_id}/form", song_form),
         web.post("/v1/songs/{song_id}/final", start_final),
         web.get("/v1/songs/{song_id}/final/audio", final_audio),
         web.get("/v1/songs/{song_id}/final/cover", final_cover),

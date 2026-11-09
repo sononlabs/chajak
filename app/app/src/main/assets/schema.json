@@ -2,7 +2,7 @@
   "packageName": "ai.sonon.chajak",
   "invokeWord": "차작",
   "appDescription": "Chajak turns a melody the driver hums in the car into a finished song with lyrics and cover art, and lets the driver change the arrangement by voice.",
-  "version": "0.4.9-drive",
+  "version": "0.4.10-drive",
   "actionCalls": [
     {
       "type": "function",

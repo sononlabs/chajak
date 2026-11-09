@@ -166,7 +166,8 @@ def _clean(out: dict, feeling: str) -> dict:
             "feeling": _words(out.get("feeling"))[:30],
             "phrases": [p[:40] for p in phrases],
             "title": m(out.get("title"))[:30],
-            "direction": feeling}
+            "direction": feeling,
+            "_names": names}  # 서버가 받아쓴 글을 가릴 때만 쓰고 앱에는 보내지 않는다
 
 
 class DigestError(Exception):
