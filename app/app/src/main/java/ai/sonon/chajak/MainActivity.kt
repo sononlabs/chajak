@@ -339,6 +339,8 @@ class MainActivity : Activity() {
         onList = false
         onDeviceCheck = false
         onSettings = false
+        homeFinalBar = null
+        homeFinalText = null
         root.removeAllViews()
         val page = column()
         val col = column().apply {
@@ -385,7 +387,7 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ 왼쪽 탭
 
-    enum class Tab(val label: String, val glyph: String) { STUDIO("녹음실", "●"), MUSIC("내 노래", "♫"), MELODIES("내 멜로디", "♪"), SETTINGS("설정", "⚙") }
+    enum class Tab(val label: String, val glyph: String) { STUDIO("녹음실", "●"), MELODIES("내 멜로디", "♪"), MUSIC("내 노래", "♫"), SETTINGS("설정", "⚙") }
 
     private var tab = Tab.STUDIO
     /** 목록 탭이 떠 있으면 목록을 새로 받았을 때 다시 그린다. */
@@ -407,7 +409,7 @@ class MainActivity : Activity() {
             addView(text(t.glyph, TITLE, if (on) RECORDING.takeIf { t == Tab.STUDIO } ?: TEXT else TEXT3).apply { gravity = Gravity.CENTER })
             addView(text(t.label, if (on) BODY_S_STRONG else BODY_S, if (on) TEXT else TEXT2).apply { gravity = Gravity.CENTER }.withMargin(top = 4))
         }
-        val main = listOf(Tab.STUDIO, Tab.MUSIC, Tab.MELODIES)
+        val main = listOf(Tab.STUDIO, Tab.MELODIES, Tab.MUSIC)  // 만드는 순서대로(2026-11-09 사용자): 녹음실 → 내 멜로디 → 내 노래
         addView(column().apply {
             main.forEach { t ->
                 addView(cell(t), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(TAB_H)).apply { if (t != main.last()) bottomMargin = dp(TAB_GAP) })
@@ -595,13 +597,12 @@ class MainActivity : Activity() {
         addView(text(line, BODY_S, color))
     }
 
-    private fun dateOf(item: JSONObject) = item.optString("created").let { c ->
-        if (c.length >= 16) "${c.substring(5, 7)}.${c.substring(8, 10)} ${c.substring(11, 16)}" else c
-    }
+    private fun dateOf(item: JSONObject) = localCreated(item.optString("created"))?.let { c ->
+        "%02d.%02d %02d:%02d".format(c.monthValue, c.dayOfMonth, c.hour, c.minute)
+    } ?: item.optString("created")
 
     /** 곡 표지(없으면 ♪). 받아 둔 표지는 다시 받지 않는다. */
     private fun thumb(item: JSONObject): View = FrameLayout(this).apply {
-        val id = item.getString("id")
         val img = ImageView(this@MainActivity).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = round(TINT, 16)
@@ -613,18 +614,7 @@ class MainActivity : Activity() {
                     FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             return@apply
         }
-        thumbs[id]?.let { img.setImageBitmap(it); return@apply }
-        val url = item.getString("cover_url")
-        images.execute {
-            try {
-                val png = api.bytes(url)
-                // 깨진·빈 그림이면 decode 가 null — 그대로 두면 Kotlin null 검사에서 앱이 죽는다
-                val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: return@execute
-                ui.post { thumbs[id] = bmp; img.setImageBitmap(bmp) }
-            } catch (e: Exception) {
-                Log.w(this@MainActivity.tag, "표지 못 받음: ${e.message}")
-            }
-        }
+        loadCover(item.getString("cover_url"), COVER_THUMB) { img.setImageBitmap(it) }
     }
 
     private var onHome = false
@@ -650,12 +640,7 @@ class MainActivity : Activity() {
             addView(caption("5~30초 한 소절이면 가장 잘 돼요(최대 ${MAX_RECORD_SEC}초). 다 부르면 가운데 버튼을 누르세요.", TEXT3))
             if (!stacking) {
                 resumeCard()?.let { addView(it) }
-                finalJob?.let { job ->
-                    addView(button("만드는 노래 · 상태 보기", size = Size.MEDIUM) {
-                        resumeFinalJob()
-                        job.optString("song_id").takeIf { it.isNotEmpty() }?.let { openSong(it, create = true) }
-                    }.withMargin(top = 16))
-                }
+                finalJob?.let { job -> addView(homeFinalCard(job)) }
                 addView(rangeCard())
             }
         }, ::showHome, tabs = true) {
@@ -678,7 +663,8 @@ class MainActivity : Activity() {
     /** 정차하면 이어서: 하루 안에 만든 멜로디가 노래 없이 남아 있으면 바로 노래 만들기로. 주행 중에는 안 띄운다(소리·움직임 없음). */
     private fun resumeCard(): View? {
         if (driving) return null
-        val item = library.filter { it.isNull("title") && DriveTheme.withinHours(it.optString("created"), 24) }
+        val making = finalJob?.optString("song_id")
+        val item = library.filter { it.isNull("title") && it.optString("id") != making && DriveTheme.withinHours(it.optString("created"), 24) }
             .maxByOrNull { it.optString("created") } ?: return null
         val id = item.optString("id")
         return LinearLayout(this).apply {
@@ -1245,7 +1231,6 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ 내 노래(목록)
 
     private var library = listOf<JSONObject>()
-    private val thumbs = HashMap<String, Bitmap>()
 
     private fun loadLibrary() {
         io.execute {
@@ -1434,8 +1419,8 @@ class MainActivity : Activity() {
             max = 100
             progress = value
             progressTintList = ColorStateList.valueOf(GRAY_600)
-            thumbTintList = ColorStateList.valueOf(GRAY_600)
             progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
+            smallThumb(GRAY_600)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) { title.text = "$name  $p" }
                 override fun onStartTrackingTouch(b: SeekBar?) {}
@@ -1498,14 +1483,9 @@ class MainActivity : Activity() {
                         "done" -> {
                             val completed = api.song(songId)
                             val final = completed.optJSONObject("final")
-                            val url = final?.optString("cover_url")?.takeIf { it.isNotEmpty() }
-                            // 표지 다운로드가 실패해도 완성된 노래는 열 수 있게 한다.
-                            val bitmap = url?.let { runCatching { api.bytes(it) }.getOrNull() }
-                                ?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
                             ui.post {
                                 if (token == finalPollToken && !isDestroyed) {
                                     rememberFinalJob(null)
-                                    if (url != null && bitmap != null) { covers[url] = bitmap; thumbs[songId] = bitmap }
                                     val sameSong = song?.optString("id") == songId
                                     if (sameSong) song = completed
                                     if (active && sameSong && !recording && !counting && drill == Drill.IDLE) {
@@ -1541,7 +1521,7 @@ class MainActivity : Activity() {
                                 if (token == finalPollToken && !isDestroyed) {
                                     finalJob = j
                                     if (active && !recording && !counting && drill == Drill.IDLE) {
-                                        if (changed) refresh() else finalElapsed?.let { updateFinalPending(j) }
+                                        if (changed) refresh() else if (finalElapsed != null || (onHome && homeFinalText != null)) updateFinalPending(j)
                                     }
                                 }
                             }
@@ -1593,10 +1573,7 @@ class MainActivity : Activity() {
             j.optString("cover_url").takeIf { it.isNotEmpty() }?.let { url ->
                 addView(ImageView(this@MainActivity).apply {
                     scaleType = ImageView.ScaleType.CENTER_CROP; background = round(TINT, 16); clipToOutline = true
-                    covers[url]?.let { setImageBitmap(it) } ?: images.execute {
-                        runCatching { api.bytes(url) }.getOrNull()?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-                            ?.let { b -> ui.post { covers[url] = b; setImageBitmap(b) } }
-                    }
+                    loadCover(url, COVER_SMALL) { setImageBitmap(it) }
                 }, LinearLayout.LayoutParams(dp(112), dp(112)).apply { marginEnd = dp(20) })
             }
             addView(column().apply {
@@ -1627,10 +1604,53 @@ class MainActivity : Activity() {
     }
 
     private fun updateFinalPending(j: JSONObject) {
-        val elapsed = (System.currentTimeMillis() / 1000.0 - j.getDouble("created")).toFloat()
+        val elapsed = (System.currentTimeMillis() / 1000.0 - j.optDouble("created", System.currentTimeMillis() / 1000.0)).toFloat()
         val eta = j.optDouble("eta_sec", 180.0).toFloat()
         finalPendingBar?.progress = (elapsed / eta * 1000).toInt().coerceIn(0, 980)
         finalElapsed?.text = "${clock(elapsed)} 지남 · 약 ${clock(maxOf(0f, eta - elapsed))} 남음 · 다른 화면을 봐도 계속 만들어요"
+        homeFinalBar?.progress = (elapsed / eta * 1000).toInt().coerceIn(0, 980)
+        homeFinalText?.text = homeFinalLine(j, elapsed, eta)
+    }
+
+    private var homeFinalBar: android.widget.ProgressBar? = null
+    private var homeFinalText: TextView? = null
+
+    private fun homeFinalLine(j: JSONObject, elapsed: Float, eta: Float): String {
+        val stage = FINAL_STAGES.firstOrNull { it.first == j.optString("stage") }?.second?.substringBefore(" (") ?: "준비하는 중"
+        return "$stage · 약 ${clock(maxOf(0f, eta - elapsed))} 남음"
+    }
+
+    /**
+     * 녹음실의 "만드는 노래" 카드(2026-11-09 시나리오 점검): 전에는 "만드는 노래 · 상태 보기" 버튼 하나라 눌러야 진행을 알았다.
+     * 지금 단계 · 남은 시간 · 진행 막대를 바로 보여 주고, 카드를 누르면 만드는 화면으로 간다.
+     */
+    private fun homeFinalCard(job: JSONObject): View = column().apply {
+        background = pressable(round(SURFACE, 24, POSITIVE), round(TINT, 24))
+        setPadding(dp(28), dp(20), dp(28), dp(20))
+        contentDescription = "만드는 노래 상태 보기"
+        setOnClickListener {
+            resumeFinalJob()
+            job.optString("song_id").takeIf { it.isNotEmpty() }?.let { openSong(it, create = true) }
+        }
+        val elapsed = (System.currentTimeMillis() / 1000.0 - job.optDouble("created", System.currentTimeMillis() / 1000.0)).toFloat()
+        val eta = job.optDouble("eta_sec", 180.0).toFloat()
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(column().apply {
+                addView(text(dot("●  노래 만드는 중", POSITIVE).toString(), BODY_STRONG, TEXT).apply { text = dot("●  노래 만드는 중", POSITIVE) })
+                homeFinalText = text(homeFinalLine(job, elapsed, eta), BODY, TEXT2).withMargin(top = 4)
+                addView(homeFinalText)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(text("보기 →", BODY_S_STRONG, POSITIVE))
+        })
+        homeFinalBar = android.widget.ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = (elapsed / eta * 1000).toInt().coerceIn(0, 980)
+            progressTintList = android.content.res.ColorStateList.valueOf(POSITIVE)
+        }
+        addView(homeFinalBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(12) })
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) }
     }
 
     /** 완성된 노래 카드: 표지 · 제목 · 주제 · 길이 → 누르면 노래 듣기 화면. */
@@ -1660,20 +1680,48 @@ class MainActivity : Activity() {
             clipToOutline = true
         }
         val url = f?.optString("cover_url")?.takeIf { it.isNotEmpty() } ?: return v
-        covers[url]?.let { v.setImageBitmap(it); return v }
-        images.execute {
-            try {
-                val png = api.bytes(url)
-                val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: return@execute
-                ui.post { covers[url] = bmp; v.setImageBitmap(bmp) }
-            } catch (e: Exception) {
-                Log.w(tag, "표지를 받지 못함: ${e.message}")
-            }
-        }
+        loadCover(url, COVER_LARGE) { v.setImageBitmap(it) }
         return v
     }
 
-    private val covers = HashMap<String, Bitmap>()
+    // ------------------------------------------------------------------ 표지 받기(한 곳)
+
+    /** 받아 둔 표지(크기별). 큰 그림 몇 장으로 메모리가 차지 않게 24MB 까지만. */
+    private val coverMem = object : android.util.LruCache<String, Bitmap>(24 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap) = value.byteCount
+    }
+    /** 받는 중인 표지 → 다 받으면 그릴 칸들. 화면이 다시 그려질 때마다 같은 표지를 또 받던 것(2026-11-09, 터널에서 목록 1분)을 막는다. */
+    private val coverWaiting = HashMap<String, MutableList<(Bitmap) -> Unit>>()
+
+    /**
+     * 표지 하나를 px 크기로 받아 onReady 에 준다(ui 스레드). 서버가 ?size= 로 줄인 JPEG 를 준다(1024px PNG 1.4MB → 384px 25KB).
+     * 다 만든 노래의 표지는 디스크(cacheDir/covers)에도 남겨 앱을 다시 켜도 바로 뜬다. 만드는 중 표지(/v1/jobs/…)는 남기지 않는다.
+     */
+    private fun loadCover(url: String, px: Int, onReady: (Bitmap) -> Unit) {
+        val key = url + (if ('?' in url) "&" else "?") + "size=$px"
+        coverMem.get(key)?.let { return onReady(it) }
+        coverWaiting[key]?.let { it.add(onReady); return }
+        coverWaiting[key] = mutableListOf(onReady)
+        val keep = !url.startsWith("/v1/jobs/")
+        val file = File(cacheDir, "covers/" + sha1(api.base + key) + ".jpg")
+        images.execute {
+            val bmp = try {
+                val bytes = if (keep && file.exists()) file.readBytes()
+                            else api.bytes(key).also { if (keep) { file.parentFile?.mkdirs(); file.writeBytes(it) } }
+                // 깨진·빈 그림이면 decode 가 null — 그대로 두면 Kotlin null 검사에서 앱이 죽는다
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: run { file.delete(); null }
+            } catch (e: Exception) {
+                Log.w(tag, "표지 못 받음: ${e.message}")
+                null
+            }
+            ui.post {
+                val waiting = coverWaiting.remove(key) ?: return@post
+                if (bmp != null) { coverMem.put(key, bmp); waiting.forEach { it(bmp) } }
+            }
+        }
+    }
+
+    private fun sha1(s: String) = java.security.MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
     /** 노래 듣기 화면에서 고른 버전(null 이면 가장 최근). */
     private var playerVersion: String? = null
     private var showRemix = false
@@ -1838,8 +1886,8 @@ class MainActivity : Activity() {
                     contentDescription = "재생 위치"
                     max = 1000
                     progressTintList = ColorStateList.valueOf(POSITIVE)
-                    thumbTintList = ColorStateList.valueOf(POSITIVE)
                     progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
+                    smallThumb(POSITIVE)
                     setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                         override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) {}
                         override fun onStartTrackingTouch(b: SeekBar?) {}
@@ -3101,6 +3149,23 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
+    /**
+     * 슬라이더 손잡이를 작은 원(지름 28, 흰 테두리)으로. 기본 테마 손잡이는 지름이 70px 넘게 커서 막대를 가렸다(2026-11-09 사용자).
+     * 누를 때 퍼지는 큰 물결도 없앤다. 막대가 손잡이 양옆에서 끊기지 않게 splitTrack 끔.
+     */
+    private fun SeekBar.smallThumb(color: Int) {
+        thumb = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            setStroke(dp(4), Color.WHITE)
+            setSize(dp(THUMB), dp(THUMB))
+        }
+        thumbTintList = null
+        splitTrack = false
+        background = null
+        thumbOffset = dp(THUMB) / 2
+    }
+
     private fun round(color: Int, radius: Int, stroke: Int? = null) = GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(radius).toFloat()
@@ -3455,6 +3520,12 @@ class MainActivity : Activity() {
         const val TAB_W = 232
         const val TAB_H = 168
         const val TAB_GAP = 32
+        /** 슬라이더 손잡이 지름. */
+        const val THUMB = 28
+        /** 표지 받는 크기(px): 목록 칸 · 만드는 중 작은 칸 · 노래 듣기 큰 표지. */
+        const val COVER_THUMB = 384
+        const val COVER_SMALL = 256
+        const val COVER_LARGE = 768
         /** 맨 아래 설정 탭 높이(주 탭보다 낮게 — 자주 누르지 않는다). */
         const val SETTINGS_TAB_H = 128
         const val MUSIC_COVER = 240

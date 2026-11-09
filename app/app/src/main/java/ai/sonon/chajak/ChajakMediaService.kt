@@ -199,7 +199,8 @@ class ChajakMediaService : MediaLibraryService() {
         val meta = MediaMetadata.Builder()
             .setTitle(title).setArtist("차작").setAlbumTitle(album)
             .setIsPlayable(true)
-        if (cover.isNotEmpty()) meta.setArtworkUri(Uri.parse(serverUrl(cover, 0)))
+        // 차 화면의 앨범 그림은 작게(서버가 줄인 JPEG) — 원본 PNG 1.4MB 를 받을 필요가 없다
+        if (cover.isNotEmpty()) serverUrl(cover, 0).let { meta.setArtworkUri(Uri.parse(it + (if ('?' in it) "&" else "?") + "size=512")) }
         val b = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(meta.build())
         if (path.isNotEmpty()) b.setUri(Uri.parse(serverUrl(path, 0)))
         return b.build()

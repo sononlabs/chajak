@@ -11,8 +11,8 @@ android {
         applicationId = "ai.sonon.chajak"
         minSdk = 28
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.4.7-drive"
+        versionCode = 12
+        versionName = "0.4.8-drive"
         // 차작 서버 주소. 에뮬레이터 기본 = PC(10.0.2.2). 심사용 APK 는 ./gradlew assembleDebug -PchajakServer=https://… 로 바꿔 빌드
         buildConfigField("String", "SERVER_URL", "\"${(project.findProperty("chajakServer") ?: "http://10.0.2.2:8790")}\"")
     }

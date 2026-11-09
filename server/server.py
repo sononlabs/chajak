@@ -253,7 +253,7 @@ async def create_song(request):
     track["mode"] = "overlay"
     track["input"] = source
     store: Store = request.app["store"]
-    song = {"id": song_id, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "tempo": track["tempo"], "key": track["key"],
+    song = {"id": song_id, "created": _now_iso(), "tempo": track["tempo"], "key": track["key"],
             "tracks": [track], "ai": None}
     store.save(song)
     d = store.dir(song_id)
@@ -396,6 +396,52 @@ async def list_songs(request):
 
 async def get_song(request):
     return web.json_response(song_view(request.app["store"].load(request.match_info["song_id"])))
+
+
+_THUMBS: dict[tuple, bytes] = {}
+THUMB_SIZES = range(64, 1025)
+
+
+def _make_thumb(path: Path, size: int) -> bytes:
+    from PIL import Image
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((size, size), Image.LANCZOS)
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=82, optimize=True)
+        return out.getvalue()
+
+
+async def _cover_response(request, path: Path):
+    """표지. ?size=N 이면 N px JPEG(목록·작은 칸용)로 줄여 준다 — 1024px PNG(약 1.3MB)를 터널로 받으면
+    목록 하나에 1분이 걸리고 앱 메모리도 한 장에 4MB 씩 들었다(2026-11-09). 줄인 그림은 메모리에 기억해 둔다."""
+    if not path.exists():
+        raise ApiError(404, "NOT_FOUND", "표지가 아직 없어요.")
+    size = request.query.get("size")
+    cache = {"Cache-Control": "public, max-age=86400"}
+    if not size:
+        return web.FileResponse(path, headers={"Content-Type": "image/png", **cache})
+    try:
+        n = int(size)
+    except ValueError:
+        raise ApiError(400, "BAD_OPTION", "size 는 64~1024 사이 숫자여야 해요.")
+    if n not in THUMB_SIZES:
+        raise ApiError(400, "BAD_OPTION", "size 는 64~1024 사이 숫자여야 해요.")
+    key = (str(path), path.stat().st_mtime_ns, n)
+    data = _THUMBS.get(key)
+    if data is None:
+        data = await asyncio.get_running_loop().run_in_executor(None, _make_thumb, path, n)
+        if len(_THUMBS) > 256:
+            _THUMBS.clear()
+        _THUMBS[key] = data
+    return web.Response(body=data, content_type="image/jpeg", headers=cache)
+
+
+def _now_iso() -> str:
+    """만든 시각(시간대 포함, 예: 2026-11-09T23:31:28+09:00). 서버와 차의 시간대가 달라도 앱이 차 시각으로 바꿔 보여 준다
+    (2026-11-09: 시간대 없이 적어서 에뮬레이터·원격 서버에서 '아침 출근길' 곡이 '밤 드라이브 앨범'에 묶였다)."""
+    import datetime
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _file_response(path: Path):
@@ -637,7 +683,7 @@ async def _run_final(app, job: dict, song: dict):
                      "title": words["title"], "style": style, "scene": words["cover"],
                      "lyrics": words["sections"] if sung else {}, "lyrics_text": text, "syllable_miss": words["miss"], "plan": plan, "seed": seed,
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
-                     "file": audio_file, "cover": cover_file, "created": time.strftime("%Y-%m-%dT%H:%M:%S"), "abc": abc,
+                     "file": audio_file, "cover": cover_file, "created": _now_iso(), "abc": abc,
                      "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
                      "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
                      "melody_abc": src}
@@ -668,10 +714,7 @@ async def final_audio(request):
 
 async def final_cover(request):
     d, f = _final(request)
-    path = d / f.get("cover", "cover.png")
-    if not path.exists():
-        raise ApiError(404, "NOT_FOUND", "표지가 아직 없어요.")
-    return web.FileResponse(path, headers={"Content-Type": "image/png"})
+    return await _cover_response(request, d / f.get("cover", "cover.png"))
 
 
 async def get_job(request):
@@ -685,9 +728,9 @@ async def job_cover(request):
     """만드는 중인 노래의 표지(그려지는 대로 먼저 보여 준다)."""
     job = request.app["jobs"].get(request.match_info["job_id"])
     path = Path(job["_cover"]) if job and job.get("_cover") else None
-    if path is None or not path.exists():
+    if path is None:
         raise ApiError(404, "NOT_FOUND", "표지가 아직 없어요.")
-    return web.FileResponse(path, headers={"Content-Type": "image/png"})
+    return await _cover_response(request, path)
 
 
 async def hum_audio(request):

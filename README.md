@@ -33,9 +33,9 @@
 노래를 만드는 서버(ComfyUI·GPU)는 서버 PC 한 대에서만 돌린다. 협업자는 앱만 설치해 그 서버에 붙는다.
 
 1. Android Studio 로 **Pleos Connect 에뮬레이터**를 만든다(Pleos Playground 안내대로).
-2. `app/apk/chajak-0.4.7-drive.apk` 설치:
+2. `app/apk/chajak-0.4.8-drive.apk` 설치:
    ```bash
-   adb install -r --user 10 app/apk/chajak-0.4.7-drive.apk
+   adb install -r --user 10 app/apk/chajak-0.4.8-drive.apk
    ```
 3. 앱 왼쪽 아래 **⚙ 설정** 탭 → **서버 연결**에 서버 PC 가 알려 준 주소(예: `https://….trycloudflare.com`)를 넣고 **연결 확인 후 저장**. "● 연결됐어요"가 뜨면 된다.
 4. 녹음하려면 PC 에 마이크가 있어야 하고, 에뮬레이터 설정 → Microphone 의 **"Virtual microphone uses host audio input"** 을 켠다. 소리가 전혀 안 들어오면 앱이 "마이크에서 소리가 전혀 들어오지 않아요"라고 알려 준다.

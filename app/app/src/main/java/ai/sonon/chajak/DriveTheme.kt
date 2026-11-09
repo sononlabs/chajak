@@ -32,8 +32,7 @@ object DriveTheme {
         return "${DAYS[t.dayOfWeek]} ${moment(t)}, $part ${h}시의 드라이브"
     }
 
-    private fun parse(created: String?): LocalDateTime? =
-        created?.takeIf { it.length >= 19 }?.let { runCatching { LocalDateTime.parse(it.substring(0, 19)) }.getOrNull() }
+    private fun parse(created: String?): LocalDateTime? = localCreated(created)
 
     /** 서버 created(2026-11-05T23:32:54) → 앨범 이름. */
     fun momentOf(created: String?): String = parse(created)?.let(::moment) ?: "그 밖의"
