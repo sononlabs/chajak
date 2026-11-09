@@ -1189,6 +1189,7 @@ class MainActivity : Activity() {
             addView(label("주제"))
             addView(promptRow(enabled = !making))
             addView(caption(if (themeFromDrive) "오늘 드라이브로 채웠어요. 🎲 로 바꾸거나 🎤 로 말해도 돼요." else "비워 두면 🎲 처럼 아무 주제나 골라요.", TEXT3))
+            addView(talkCard(s))
             s.optJSONObject("mood")?.let { m ->
                 addView(moodLine(m.optString("label"),
                     if (followMood) "${Mood.name(m)}에 맞춰 ${m.optString("genre")} 쪽으로 만들어요. 주제에 장르를 적으면 그 장르를 따라요."
@@ -1220,6 +1221,193 @@ class MainActivity : Activity() {
                 listOf(if (making) recordButton(Rec.BUSY, "만드는 중", onClick = null)
                        else button("노래 만들기", Btn.SECONDARY) { createFinal() }),
                 s.optJSONObject("final")?.let { button("완성된 노래 →") { showPlayer(false) } })
+        }
+    }
+
+    // ------------------------------------------------------------------ 대화로 가사 만들기(저니맵 02)
+
+    /** 대화 녹음은 16kHz(말소리에 충분) — 10분이 약 19MB 라 서버 업로드 한도(20MB) 안에 든다. */
+    private val talkRecorder = HumRecorder(16000)
+    private var talkDirection = "그대로"
+    /** 서버가 정리해 준 이야기(theme·story·feeling·phrases·transcript…)와 그것을 붙인 곡. */
+    private var talkResult: JSONObject? = null
+    private var talkFor: String? = null
+    private var talkCancelled = false
+    private var talkTime: TextView? = null
+    private var showTranscript = false
+
+    private fun talkPayload(s: JSONObject): JSONObject? {
+        val t = talkResult?.takeIf { talkFor == s.optString("id") && it.optBoolean("enough", true) } ?: return null
+        return JSONObject().put("story", t.optString("story")).put("feeling", t.optString("feeling"))
+            .put("phrases", t.optJSONArray("phrases") ?: org.json.JSONArray()).put("direction", t.optString("direction", "그대로"))
+    }
+
+    /** 노래 만들기 화면의 대화 칸: 붙인 대화가 있으면 요약 + 빼기, 없으면 녹음 시작 버튼. */
+    private fun talkCard(s: JSONObject): View = column().apply {
+        val t = talkResult?.takeIf { talkFor == s.optString("id") }
+        background = round(SURFACE, 24, if (t != null) POSITIVE else null)
+        setPadding(dp(28), dp(20), dp(28), dp(20))
+        if (t != null) {
+            addView(text(dot("●  대화로 가사를 써요 · ${t.optString("direction")}", POSITIVE).toString(), BODY_STRONG, TEXT).apply { text = dot("●  대화로 가사를 써요 · ${t.optString("direction")}", POSITIVE) })
+            addView(text(t.optString("story"), BODY, TEXT2).withMargin(top = 6))
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(button("내용 보기", size = Size.MEDIUM) { showTalkResult() }.withMargin(end = 16))
+                addView(button("대화 빼기", size = Size.MEDIUM) { talkResult = null; talkFor = null; refresh() })
+            }.withMargin(top = 12))
+        } else {
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(column().apply {
+                    addView(text("🗣  대화로 가사 만들기", BODY_STRONG, TEXT))
+                    addView(text(if (driving) "정차 중에 시작할 수 있어요(차 안 모든 분께 녹음을 알려야 해요)."
+                                 else "차 안에서 나눈 이야기를 받아써서 그 이야기로 가사를 써요. 10분까지.", BODY_S, TEXT3).withMargin(top = 4))
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(button("녹음하기", size = Size.MEDIUM, enabled = !driving) { showTalkIntro() })
+            })
+        }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) }
+    }
+
+    /** 녹음 전: 차 안 모든 사람에게 알리기 + 어떤 노래로(방향). 녹음 버튼 자리는 다른 녹음 화면과 같다. */
+    private fun showTalkIntro(notice: String? = null) {
+        show({
+            addView(steps(2))
+            addView(headline("대화로 가사 만들기"))
+            addView(body("차 안에서 나눈 이야기를 녹음해 받아쓰고, 그 이야기로 가사를 써요. 멜로디는 지금 곡(${songName(song ?: JSONObject(), "내 멜로디")})을 그대로 써요."))
+            addView(column().apply {
+                background = round(SURFACE, 24, POSITIVE)
+                setPadding(dp(32), dp(24), dp(32), dp(28))
+                addView(text("녹음하기 전에 차 안의 모든 분께 알려 주세요", BODY_STRONG, TEXT))
+                addView(text("대화는 받아쓰기에만 쓰고, 녹음 파일은 받아쓴 뒤 바로 지워요. 사람 이름·회사 같은 정보는 가사에 넣지 않아요. AI 학습에 쓰지 않아요.", BODY, TEXT2).withMargin(top = 8))
+            }.withMargin(top = 24, fill = true))
+            addView(label("어떤 노래로 만들까요?"))
+            val dirs = TALK_DIRECTIONS.keys.toList()
+            addView(segmented(dirs, dirs.indexOf(talkDirection).coerceAtLeast(0), width = 1176) { talkDirection = dirs[it]; showTalkIntro(notice) })
+            addView(caption(TALK_DIRECTIONS[talkDirection] ?: "", TEXT3))
+        }, { showTalkIntro(notice) }, tabs = true) {
+            aboveButton(notice, TEXT) {
+                zones(button("← 노래 만들기") { showCreate() },
+                      listOf(recordButton(if (driving) Rec.DISABLED else Rec.READY, if (driving) "정차 후에" else "알리고 녹음 시작",
+                                          onClick = if (driving) null else ({ startTalk() }))))
+            }
+        }
+    }
+
+    private fun startTalk() {
+        if (recording || counting) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_TALK); return
+        }
+        stopPlayback()
+        val file = File(cacheDir, "talk.wav")
+        // 시험 모드: 마이크 대신 앱 files 폴더의 대화 녹음(am start --es test_talk talk.wav)
+        intent.getStringExtra("test_talk")?.let { File(filesDir, it) }?.takeIf { it.exists() }?.let { it.copyTo(file, overwrite = true); return uploadTalk(file) }
+        if (!holdFocus()) return showTalkIntro(FOCUS_DENIED)
+        recording = true
+        talkCancelled = false
+        val started = System.currentTimeMillis()
+        showTalkRecording()
+        rec.execute {
+            val sec = try {
+                talkRecorder.record(file, TALK_MAX_SEC, device = inputDevice) { db, _ ->
+                    ui.post {
+                        wave?.push(db, if (db > VOICE_DB) ACTIVE else TEXT3)
+                        val el = (System.currentTimeMillis() - started) / 1000
+                        val left = TALK_MAX_SEC - el
+                        talkTime?.text = if (left <= 30) "${left}초 뒤 멈춰요" else "%02d:%02d".format(el / 60, el % 60)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "대화 녹음 실패", e); -1.0
+            }
+            ui.post {
+                recording = false
+                releaseFocus()
+                when {
+                    talkCancelled -> { talkCancelled = false; file.delete(); showTalkIntro("녹음을 취소했어요. 방금 녹음은 저장하지 않았어요.") }
+                    sec < 0 -> showTalkIntro("마이크를 열지 못했어요. 설정 탭의 녹음 장치를 확인해 주세요.")
+                    sec < TALK_MIN_SEC -> { file.delete(); showTalkIntro("너무 짧아요. ${TALK_MIN_SEC}초 넘게 이야기해 주세요.") }
+                    else -> uploadTalk(file)
+                }
+            }
+        }
+    }
+
+    private fun showTalkRecording() = show({
+        addView(headline("대화 녹음 중"))
+        addView(body("평소처럼 이야기하세요. 다 이야기했으면 가운데 버튼을 누르세요(최대 ${TALK_MAX_SEC / 60}분)."))
+        wave = LevelStrip(this@MainActivity).also {
+            addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
+        }
+    }, {}) {
+        talkTime = text("00:00", TITLE, TEXT)
+        val status = column().apply {
+            gravity = Gravity.END
+            addView(text("●  대화 녹음 중", HEADLINE, RECORDING).apply { maxLines = 1 },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END })
+            addView(talkTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.END; topMargin = dp(4) })
+        }
+        zones(button("✕  녹음 취소") { talkCancelled = true; talkRecorder.stop() },
+              listOf(recordButton(Rec.RECORDING, "녹음 완료") { talkRecorder.stop() }), status)
+    }
+
+    private fun uploadTalk(file: File) {
+        val songId = song?.optString("id")
+        show({
+            addView(steps(2, busy = true))
+            addView(headline("대화를 받아쓰는 중"))
+            addView(body("받아쓰고 노래 이야기로 정리하고 있어요. 대화 길이에 따라 30초~2분 걸려요."))
+        }, {}) {
+            zones(null, listOf(recordButton(Rec.BUSY, "받아쓰는 중", onClick = null)))
+        }
+        io.execute {
+            try {
+                val j = api.talk(file, talkDirection)
+                ui.post {
+                    talkResult = j
+                    talkFor = songId
+                    showTranscript = false
+                    j.optString("theme").takeIf { it.isNotEmpty() && j.optBoolean("enough", true) }?.let { prompt = it; themeFromDrive = false; saveDraft() }
+                    if (active) showTalkResult()
+                }
+            } catch (e: Exception) {
+                ui.post { if (active) showTalkIntro(e.message ?: "대화를 받아쓰지 못했어요.") }
+            } finally {
+                file.delete()  // 녹음 파일은 앱에도 남기지 않는다
+            }
+        }
+    }
+
+    /** 받아쓴 대화를 노래 이야기로 정리한 결과 → 이대로 노래 만들기. */
+    private fun showTalkResult() {
+        val t = talkResult ?: return showCreate()
+        val enough = t.optBoolean("enough", true)
+        show({
+            addView(steps(2))
+            addView(headline(t.optString("title").ifEmpty { "대화로 만든 이야기" }))
+            addView(body("${clock(t.optDouble("seconds", 0.0).toFloat())} 대화 · 방향 ${t.optString("direction")}"))
+            addView(column().apply {
+                background = round(SURFACE, 24, if (enough) POSITIVE else RECORDING)
+                setPadding(dp(32), dp(24), dp(32), dp(28))
+                if (!enough) addView(text("노래로 만들 이야기가 부족해요. 조금 더 이야기한 뒤 다시 녹음해 주세요.", BODY_STRONG, RECORDING).withMargin(bottom = 12))
+                listOf("노래 주제" to t.optString("theme"), "무슨 일이 있었나" to t.optString("story"), "감정" to t.optString("feeling"),
+                       "가사에 살릴 말" to (t.optJSONArray("phrases")?.let { a -> (0 until a.length()).joinToString(" · ") { "‘${a.optString(it)}’" } } ?: ""))
+                    .filter { it.second.isNotBlank() }
+                    .forEachIndexed { i, (k, v) ->
+                        addView(text(k, BODY_S_STRONG, TEXT3).withMargin(top = if (i == 0) 0 else 16))
+                        addView(text(v, BODY, TEXT).withMargin(top = 4))
+                    }
+            }.withMargin(top = 24, fill = true))
+            addView(caption("사람 이름·회사 같은 정보는 가렸어요. 녹음 파일은 지웠어요.", TEXT3).withMargin(top = 12))
+            addView(button(if (showTranscript) "받아쓴 대화 접기 ▴" else "받아쓴 대화 보기 ▾", size = Size.MEDIUM) { showTranscript = !showTranscript; showTalkResult() }.withMargin(top = 16))
+            if (showTranscript) addView(text(t.optString("transcript").take(1500), BODY_S, TEXT2).withMargin(top = 12))
+        }, ::showTalkResult, tabs = true) {
+            zones(button("다시 녹음") { showTalkIntro() },
+                  listOf(if (enough) button("이 이야기로 노래 만들기", Btn.SECONDARY) { createFinal() }
+                         else button("← 노래 만들기") { showCreate() }),
+                  if (enough) button("주제 고치기") { showCreate() } else null)
         }
     }
 
@@ -1444,6 +1632,7 @@ class MainActivity : Activity() {
         if (from != null) options.put("from", from).put("keep_lyrics", keepLyrics).put("keep_cover", keepCover)
         if (lyrics != null) options.put("lyrics", lyrics)
         if (!edit.isNullOrBlank()) options.put("edit", edit)
+        if (from == null) talkPayload(s)?.let { options.put("talk", it) }
         playerVersion = null
         showCreate()
         io.execute {
@@ -2412,6 +2601,7 @@ class MainActivity : Activity() {
         when {
             requestCode == REQ_DRILL -> if (granted) startDrill() else showTutorial()
             requestCode == REQ_VOICE -> if (granted) promptInput?.let { voicePrompt(it) }
+            requestCode == REQ_TALK -> if (granted) startTalk() else showTalkIntro("대화를 녹음하려면 마이크 권한이 필요해요.")
             requestCode == REQ_MUSIC_RECORD -> {
                 musicPermissionPending = false
                 // Permission dialogs may finish before onResume; require an explicit second tap.
@@ -3493,6 +3683,16 @@ class MainActivity : Activity() {
         const val REQ_MUSIC_RECORD = 4
         const val REQ_DRILL = 2
         const val REQ_VOICE = 3
+        const val REQ_TALK = 7
+        const val TALK_MAX_SEC = 600
+        const val TALK_MIN_SEC = 5
+        /** 대화로 만들 노래의 방향(서버 talk.FEELINGS 와 같은 이름). */
+        val TALK_DIRECTIONS = linkedMapOf(
+            "그대로" to "대화에서 드러난 감정을 그대로 살려요. 위로나 교훈으로 바꾸지 않아요.",
+            "통쾌하게" to "억울하고 답답했던 마음을 시원하게 받아치는 노래로.",
+            "담담하게" to "과장하지 않고 이야기하듯 담담하게.",
+            "유쾌하게" to "웃음이 나는 가볍고 신나는 노래로.",
+        )
         /** 노래 만들기 단계(서버 job stage) → 화면 문구. */
         val FINAL_STAGES = listOf(
             "melody" to "멜로디를 2분 곡으로 늘리는 중 (전주·절·후렴·브리지 + 화음)",

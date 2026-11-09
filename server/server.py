@@ -26,6 +26,7 @@ import lyrics
 import melody_ai
 import melody_mood
 import melody_notes
+import talk as T
 
 STORAGE = Path(__file__).parent / "storage"
 SR = 44100
@@ -569,6 +570,8 @@ async def start_final(request):
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
             "style_weight": int(min(100, max(0, int(body.get("style_weight", 50))))),
             "follow_mood": body.get("follow_mood", True) is not False}
+    if body.get("talk"):  # 대화로 가사 만들기: /v1/talk 가 정리해 준 이야기를 가사에 넣는다
+        opts["talk"] = T.sanitize(body.get("talk"))
     # 다시 만들기: 이전 버전을 바탕으로 가중치·주제·가사·스타일만 바꾼다
     base = next((f for f in song.get("finals", []) if f.get("id") == body.get("from")), None)
     if body.get("from") and base is None:
@@ -651,7 +654,7 @@ async def _run_final(app, job: dict, song: dict):
         elif remix["keep_lyrics"] and same_form:
             words = {"title": base["title"], "style": base["style"], "cover": base.get("scene", ""), "sections": base["lyrics"], "miss": base.get("syllable_miss")}
         else:
-            words = await lyrics.write(job["prompt"], plan, seed, mood)
+            words = await lyrics.write(job["prompt"], plan, seed, mood, T.talk_lines(opts.get("talk")))
             # 새로 쓴 가사일 때만 스타일·표지를 멜로디 느낌에 맞춘다(가사·스타일을 지킨 다시 만들기는 그대로)
             words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
             if mood and words["cover"]:
@@ -715,6 +718,37 @@ async def final_audio(request):
 async def final_cover(request):
     d, f = _final(request)
     return await _cover_response(request, d / f.get("cover", "cover.png"))
+
+
+async def talk_upload(request):
+    """대화로 가사 만들기(저니맵 02): multipart audio(차 안 대화, 10분까지) + direction(그대로·통쾌하게·담담하게·유쾌하게).
+    → 받아쓰기 + 노래 이야기 정리 {transcript, lines, seconds, enough, theme, story, feeling, phrases, title, direction}.
+    녹음 파일은 저장하지 않는다(받아쓰고 나면 버린다)."""
+    data, filename, fields = await _form(request)
+    direction = fields.get("direction") or "그대로"
+    if direction not in T.FEELINGS:
+        raise ApiError(400, "BAD_OPTION", f"direction 값은 {list(T.FEELINGS)} 중 하나여야 해요.")
+    try:
+        info = sf.info(io.BytesIO(data))
+    except Exception:
+        raise ApiError(400, "BAD_AUDIO", "녹음 파일을 읽지 못했어요. 다시 녹음해 주세요.")
+    if info.duration > T.MAX_TALK_SEC:
+        raise ApiError(413, "TOO_LONG", "대화 녹음은 10분까지예요.")
+    t0 = time.perf_counter()
+    try:
+        heard = await T.transcribe(data)
+    except Exception as e:
+        if "snapshot" in str(e) or "local_files_only" in str(e) or "No such file" in str(e):
+            raise ApiError(503, "STT_UNAVAILABLE", "받아쓰기 모델이 서버에 아직 없어요. 서버 PC 에서 faster-whisper 모델을 받아 주세요.")
+        raise
+    del data
+    if len(heard["text"].replace(" ", "")) < 8:
+        raise ApiError(422, "TALK_EMPTY", "말소리가 거의 들리지 않았어요. 마이크 가까이에서 다시 이야기해 주세요.")
+    t1 = time.perf_counter()
+    story = await T.digest(heard["text"], direction)
+    return web.json_response({"transcript": heard["text"], "lines": heard["lines"], "seconds": heard["seconds"], **story,
+                              "timing": {"stt_sec": round(t1 - t0, 1), "digest_sec": round(time.perf_counter() - t1, 1), "stt_device": heard["device"]}},
+                             dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
 async def get_job(request):
@@ -839,6 +873,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/v1/jobs/{job_id}/cover", job_cover),
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/hum", hum_audio),
         web.get("/v1/themes", themes),
+        web.post("/v1/talk", talk_upload),
         web.post("/v1/songs/{song_id}/final", start_final),
         web.get("/v1/songs/{song_id}/final/audio", final_audio),
         web.get("/v1/songs/{song_id}/final/cover", final_cover),

@@ -33,6 +33,8 @@ cd server
 | `POST /v1/songs` | **첫 허밍으로 곡 만들기** | 약 2초 |
 | `GET /v1/songs/{id}` | 곡 정보 | 즉시 |
 | `GET /v1/songs/{id}/audio` | 모든 트랙을 합친 음원(FLAC 44.1kHz 스테레오) | 즉시 |
+| `POST /v1/talk` | **대화로 가사 만들기**: multipart `audio`(차 안 대화, 10분까지) + `direction`(그대로·통쾌하게·담담하게·유쾌하게) → 받아쓰기(faster-whisper large-v3-turbo) + 노래 이야기 정리(주제·요약·감정·살릴 말, 이름은 가림). 녹음은 저장하지 않음. 정리 결과를 `POST /v1/songs/{id}/final` 의 `talk` 로 넘기면 가사에 들어간다 | 30초~2분 |
+| `GET /v1/songs/{id}/final/cover?size=384` | 표지. `size`(64~1024)를 주면 줄인 JPEG | 즉시 |
 | `POST /v1/songs/{id}/tracks` | **트랙 쌓기**(겹치기·이어 붙이기) | 약 2초 |
 | `GET /v1/songs/{id}/tracks/{n}/audio` | 트랙 하나의 음원 | 즉시 |
 | `DELETE /v1/songs/{id}/tracks/{n}` | 마지막에 쌓은 트랙 빼기(첫 트랙은 400) | 즉시 |

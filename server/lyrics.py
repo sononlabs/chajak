@@ -328,11 +328,11 @@ def _mood_lines(theme: str, mood: dict | None) -> str:
             + (f"장르·악기는 이미 정했다({genre}). style 에는 장르·악기를 다시 쓰지 말고 분위기·질감 태그만.\n" if genre else ""))
 
 
-def _story_prompt(theme: str, targets: dict, mood: dict | None = None) -> str:
+def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str = "") -> str:
     hook_len = (targets.get("chorus") or [6])[0]
     parts = ", ".join(f'"{k}": 이 구간에서 일어나는 장면·감정 한 문장' for k in targets)
     return (
-        f"주제: {theme}\n" + _mood_lines(theme, mood) +
+        f"주제: {theme}\n" + talk + _mood_lines(theme, mood) +
         "이 주제로 차 안에서 듣는 한국어 노래를 기획한다. 가사를 쓰기 전에 이야기를 먼저 짠다. JSON 으로만 답해.\n"
         f'{{"title": 짧은 한국어 제목, "speaker": 노래하는 사람과 상황 한 문장, "story": {{{parts}}}, '
         f'"hook": 후렴 첫 줄이 될 훅(한글 {hook_len}글자 안팎, 완결된 말), '
@@ -343,12 +343,12 @@ def _story_prompt(theme: str, targets: dict, mood: dict | None = None) -> str:
     )
 
 
-def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None) -> str:
+def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "") -> str:
     spec = "\n".join(f'- "{k}": {len(v)}줄, 줄마다 한글 글자 수 목표 {v}(목표보다 1 적게 ~ 2 많게까지 괜찮음, 말이 자연스러운 쪽). 장면: {story.get("story", {}).get(k, "")}'
                      for k, v in targets.items())
     keys = ", ".join(f'"{k}": [줄, ...]' for k in targets)
     return (
-        f"주제: {theme}\n노래하는 사람: {story.get('speaker', '')}\n훅(후렴 첫 줄): {story.get('hook', '')}\n"
+        f"주제: {theme}\n" + talk + f"노래하는 사람: {story.get('speaker', '')}\n훅(후렴 첫 줄): {story.get('hook', '')}\n"
         + (f"멜로디 느낌: {mood['label']} — 가사 말투: {TONES[mood['level']]}\n" if mood else "") +
         f"쓸 수 있는 낱말: {', '.join(map(str, story.get('images') or []))}\n"
         f"이 기획대로 가사를 쓴다. JSON 으로만 답해: {{{keys}}}\n"
@@ -438,16 +438,16 @@ def _judge_prompt(theme: str, drafts: list) -> str:
     )
 
 
-async def write(theme: str, plan: dict, seed: int, mood: dict | None = None) -> dict:
-    """작사 v2. 반환: {"title", "style", "cover", "sections", "miss", "hook", "judge"}. 약 40~60초(옛 방식 약 20초)."""
+async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, talk: str = "") -> dict:
+    """작사 v2. talk: 대화로 만들 때 기획·초안에 넣을 대화 카드(talk.talk_lines). 반환: {"title", "style", "cover", "sections", "miss", "hook", "judge"}. 약 40~60초(옛 방식 약 20초)."""
     lines = _targets(plan)
     targets, groups = _pair(lines)   # 아래는 모두 문장 단위로 쓰고, 끝에 줄로 나눈다
     async with aiohttp.ClientSession() as session:
         try:
-            story = await _ask(session, _story_prompt(theme, targets, mood), seed, keep="2m", temperature=0.9)
+            story = await _ask(session, _story_prompt(theme, targets, mood, talk), seed, keep="2m", temperature=0.9)
             drafts = []
             for i in range(2):
-                out = await _ask(session, _draft_prompt(theme, story, targets, mood), seed + 1 + i, keep="2m")
+                out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk), seed + 1 + i, keep="2m")
                 drafts.append({k: [_line(l) for l in (out.get(k) or [])][:len(v)] for k, v in targets.items()})
             judge = await _ask(session, _judge_prompt(theme, drafts), seed + 5, keep="2m", temperature=0.2)
             best = judge.get("best") if isinstance(judge.get("best"), int) and 0 <= judge.get("best") < len(drafts) else \

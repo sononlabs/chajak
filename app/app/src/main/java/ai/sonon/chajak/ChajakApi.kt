@@ -63,9 +63,13 @@ class ChajakApi(val base: String) {
         }
     }
 
-    private fun multipart(path: String, file: File, fields: Map<String, String>): JSONObject {
+    /** 대화로 가사 만들기: 차 안 대화 녹음 → 받아쓰기 + 노래 이야기 정리. 받아쓰기가 오래 걸릴 수 있어 5분까지 기다린다. */
+    fun talk(file: File, direction: String): JSONObject = multipart("/v1/talk", file, mapOf("direction" to direction), 300_000)
+
+    private fun multipart(path: String, file: File, fields: Map<String, String>, readTimeoutMs: Int = 120_000): JSONObject {
         val boundary = "chajak" + System.nanoTime()
         val c = open(path)
+        c.readTimeout = readTimeoutMs
         return try {
             c.requestMethod = "POST"
             c.doOutput = true
