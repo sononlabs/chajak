@@ -1211,9 +1211,10 @@ class MainActivity : Activity() {
                 left.addView(label("완성된 노래"))
                 left.addView(finalRow(final))
             }
-            left.addView(label("트랙 · 음표로 바꾼 멜로디"))
-            for (i in 0 until count) left.addView(trackRow(tracks!!.getJSONObject(i)))
+            left.addView(label("트랙 · 음표로 바꾼 멜로디 · 최신 순"))
+            // 새로 만든 것이 맨 위(2026-11-10 사용자: 새로 만들었는데 가장 오래된 원본부터 나와 불편) — 만드는 중인 트랙도 맨 위
             if (p != null) left.addView(pendingRow(p))
+            for (i in count - 1 downTo 0) left.addView(trackRow(tracks!!.getJSONObject(i)))
 
             val right = column()
             // AI 제안은 설명을 읽고 골라야 해서 주행 중에는 숨긴다(정차하면 다시 보인다)
@@ -1247,7 +1248,12 @@ class MainActivity : Activity() {
                 }),
                 if (s != null && idle) button(if (done) "새 버전 만들기" else "주제·목소리 정하기", size = Size.MEDIUM) { showCreate() } else null)
         }
-        if (autoplay && s != null) toggle("mix", s.optString("audio_url"))
+        // 방금 만든 결과는 새 트랙부터 들려준다(전에는 전체 섞은 소리를 원본 트랙부터 틀었다)
+        if (autoplay && s != null) {
+            val last = s.optJSONArray("tracks")?.let { a -> if (a.length() > 0) a.getJSONObject(a.length() - 1) else null }
+            if (last != null && (s.optJSONArray("tracks")?.length() ?: 0) > 1) toggle("track" + last.optInt("n"), last.optString("audio_url"))
+            else toggle("mix", s.optString("audio_url"))
+        }
         trackProgress(s?.optDouble("duration_sec", 0.0)?.toFloat() ?: 0f)
     }
 

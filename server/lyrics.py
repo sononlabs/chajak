@@ -87,7 +87,7 @@ async def _ask(session: aiohttp.ClientSession, prompt: str, seed: int, keep: str
 
 # 글자 수 허용 범위: 목표보다 1 적게 ~ 2 많게. 노래는 한 음에 두 글자를 붙여 부를 수 있어서,
 # 정확히 맞추느라 말을 토막 내는 것보다 자연스러운 문장이 낫다(2026-11-06 "가사가 너무 별로" 진단).
-SLACK_UNDER, SLACK_OVER = 1, 2
+SLACK_UNDER, SLACK_OVER = 2, 3  # 2026-11-10: 멜로디 음표를 가사 글자 수에 맞추게 되어(lyricfit) 더 느슨하게 — 말이 자연스러운 게 먼저
 
 
 def _off(got: int, w: int) -> int:
@@ -313,6 +313,24 @@ LYRIC_CRAFT = (
 )
 
 
+# 대화로 만드는 노래(2026-11-10 사용자: 가사를 너무 못 쓴다) — 차 안 장면을 억지로 넣던 규칙이 대화 내용을 덮었다
+# ("인테리어 상담" 대화가 "와이퍼 소리에 맘 흔들려"로 시작). 대화에 나온 구체적인 것으로 쓰고, 훅은 실제로 한 말에서.
+LYRIC_CRAFT_TALK = (
+    "잘 쓴 가사의 조건:\n"
+    "- 대화에 나온 구체적인 사물·장면·행동(위 '대화 속 재료')으로 장면을 그린다. 대화에 없는 차 안 풍경(와이퍼·신호등·라디오 같은 것)을 억지로 넣지 않는다.\n"
+    "- 노래하는 사람은 대화한 사람이다. 대화에서 실제로 있었던 일·한 말을 바탕으로, 듣는 사람이 '그 얘기네' 하고 알아볼 수 있게.\n"
+    "- 후렴 첫 줄은 훅이다. 대화에서 실제로 나온 말(훅 후보)을 살려 짧고 입에 붙게. 후렴 안에서 한 번 더 되풀이해도 좋다.\n"
+    "- 줄마다 완결된 말로 끝낸다(~해, ~네, ~요, ~지, 명사). 말하듯 자연스러운 한국어 문장, 조사를 빼고 낱말만 늘어놓지 않는다.\n"
+    "- 같은 구간의 줄 끝소리를 비슷하게 맞추면 부르기 좋다.\n"
+    f"- 흔한 말은 피한다: {CLICHES}.\n"
+    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 사람 이름·회사 같은 고유한 정보는 쓰지 않는다."
+)
+
+
+def _craft(talk: str) -> str:
+    return LYRIC_CRAFT_TALK if talk else LYRIC_CRAFT
+
+
 # 멜로디 성격(에너지 칸) → 가사 말투
 TONES = {"잔잔": "짧고 조용한 말, 속삭이듯. 쉼이 있는 문장", "중간": "담담하게 이야기하듯", "격정": "힘 있게 외치는 말, 짧게 되풀이하는 훅"}
 
@@ -336,15 +354,15 @@ def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str
         "이 주제로 차 안에서 듣는 한국어 노래를 기획한다. 가사를 쓰기 전에 이야기를 먼저 짠다. JSON 으로만 답해.\n"
         f'{{"title": 짧은 한국어 제목, "speaker": 노래하는 사람과 상황 한 문장, "story": {{{parts}}}, '
         f'"hook": 후렴 첫 줄이 될 훅(한글 {hook_len}글자 안팎, 완결된 말), '
-        '"images": 가사에 쓸 구체적인 소리·장면 낱말 6개(배열), '
+        + ('"images": 대화 속 재료에서 고른, 가사에 쓸 구체적인 낱말 6개(배열), ' if talk else '"images": 가사에 쓸 구체적인 소리·장면 낱말 6개(배열), ') +
         '"style": 영어 음악 스타일 태그 6~8개(장르·악기·분위기, male vocal 또는 female vocal 하나 포함)를 쉼표로, '
         '"cover": 앨범 표지 그림 설명(영어 한 문장, 장면·색·빛만. 간판·표지판·책·화면처럼 글자가 생길 만한 물건은 넣지 마)}\n'
-        "절은 장면에서 시작해 후렴에서 감정이 터지고, 2절은 한 걸음 나아가고, 브리지는 한 번 뒤집는 흐름으로.\n" + LYRIC_CRAFT
+        "절은 장면에서 시작해 후렴에서 감정이 터지고, 2절은 한 걸음 나아가고, 브리지는 한 번 뒤집는 흐름으로.\n" + _craft(talk)
     )
 
 
 def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "") -> str:
-    spec = "\n".join(f'- "{k}": {len(v)}줄, 줄마다 한글 글자 수 목표 {v}(목표보다 1 적게 ~ 2 많게까지 괜찮음, 말이 자연스러운 쪽). 장면: {story.get("story", {}).get(k, "")}'
+    spec = "\n".join(f'- "{k}": {len(v)}줄, 줄마다 한글 글자 수 대략 {v}(2 적게 ~ 3 많게까지 괜찮음. 글자 수보다 말이 자연스러운 게 먼저 — 멜로디를 가사에 맞춘다). 장면: {story.get("story", {}).get(k, "")}'
                      for k, v in targets.items())
     keys = ", ".join(f'"{k}": [줄, ...]' for k in targets)
     return (
@@ -353,8 +371,8 @@ def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = No
         f"쓸 수 있는 낱말: {', '.join(map(str, story.get('images') or []))}\n"
         f"이 기획대로 가사를 쓴다. JSON 으로만 답해: {{{keys}}}\n"
         f"구간별 줄 수·글자 수(띄어쓰기 빼고 센 한글 글자):\n{spec}\n"
-        "글자 수가 적은 줄은 조사·어미를 살려 짧은 완결된 말로(예: 4글자 '비가 와요', '집에 가자'). 쓰고 나서 글자를 세어 맞춰.\n"
-        + LYRIC_CRAFT
+        "글자 수가 적은 줄은 조사·어미를 살려 짧은 완결된 말로(예: 4글자 '비가 와요', '집에 가자').\n"
+        + _craft(talk)
     )
 
 
@@ -408,7 +426,7 @@ def _polish_prompt(theme: str, sections: dict) -> str:
     return (
         f"주제: {theme}\n아래 노래 가사를 한국어 작사가처럼 다듬어. 괄호 안은 줄마다 한글 글자 수다.\n{shown}\n\n"
         "낱말만 늘어놓은 줄, 조사가 빠진 줄, 말이 끊긴 줄, 뜻이 안 통하는 줄만 자연스러운 문장으로 고치고 좋은 줄은 그대로 둬. "
-        "줄마다 글자 수는 지금과 같게(1 적게 ~ 2 많게까지). 줄 수·구간은 그대로. 문장부호·영어·숫자 금지.\n"
+        "줄마다 글자 수는 지금과 비슷하게(2 적게 ~ 3 많게까지). 줄 수·구간은 그대로. 문장부호·영어·숫자 금지.\n"
         f"JSON 으로만: {{{keys}}}"
     )
 
@@ -428,12 +446,13 @@ async def _polish(session: aiohttp.ClientSession, theme: str, sections: dict, ta
     return result
 
 
-def _judge_prompt(theme: str, drafts: list) -> str:
+def _judge_prompt(theme: str, drafts: list, talk: str = "") -> str:
     shown = "\n\n".join(f"[{i}]\n" + "\n".join(f"{k}: " + " / ".join(v) for k, v in d.items()) for i, d in enumerate(drafts))
     return (
         f"주제: {theme}\n아래 노래 가사 후보 중 더 좋은 하나를 골라. JSON 으로만: "
         '{"best": 번호, "scores": [[자연스러움, 장면, 훅, 주제] 후보마다 1~10], "why": 한 문장}\n'
-        "기준: 말이 토막 나지 않고 자연스러운가, 구체적인 장면이 보이는가, 후렴 훅이 기억에 남는가, 주제와 이어지는가. "
+        + (talk + "기준: 대화에서 있었던 일과 한 말이 가사에 담겼는가(가장 중요), 말이 자연스러운가, 후렴 훅이 기억에 남는가. 대화에 없는 차 안 풍경을 억지로 넣었으면 감점. "
+           if talk else "기준: 말이 토막 나지 않고 자연스러운가, 구체적인 장면이 보이는가, 후렴 훅이 기억에 남는가, 주제와 이어지는가. ") +
         f"흔한 말({CLICHES})이 많으면 감점.\n\n{shown}"
     )
 
@@ -449,7 +468,7 @@ async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, tal
             for i in range(2):
                 out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk), seed + 1 + i, keep="2m")
                 drafts.append({k: [_line(l) for l in (out.get(k) or [])][:len(v)] for k, v in targets.items()})
-            judge = await _ask(session, _judge_prompt(theme, drafts), seed + 5, keep="2m", temperature=0.2)
+            judge = await _ask(session, _judge_prompt(theme, drafts, talk), seed + 5, keep="2m", temperature=0.2)
             best = judge.get("best") if isinstance(judge.get("best"), int) and 0 <= judge.get("best") < len(drafts) else \
                 min(range(len(drafts)), key=lambda i: _miss(drafts[i], targets))
             sections = drafts[best]

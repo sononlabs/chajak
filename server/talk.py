@@ -160,6 +160,8 @@ def _digest_prompt(transcript: str, feeling: str) -> str:
         '"story": 무슨 일이 있었는지 2~3문장, '
         '"feeling": 이 노래의 감정 낱말 1~2개, '
         '"phrases": 대화에서 실제로 나온 말 중 가사에 살리면 좋을 짧은 표현 3~5개(배열, 고유한 정보는 바꿔서), '
+        '"details": 대화에 나온 구체적인 사물·장면·행동 6~10개(배열, 짧은 낱말·구. 예: 장면을 그릴 수 있는 것), '
+        '"hooks": 후렴 첫 줄이 될 만한, 대화에서 실제로 나온 짧은 말 2~3개(배열, 띄어쓰기 빼고 10자 안팎), '
         '"title": 노래 제목 후보(짧게), '
         '"names": 대화에 나온 사람 이름·회사·가게 이름을 받아쓴 그대로(배열, 없으면 [])}\n'
         f"대화:\n{transcript}"
@@ -201,6 +203,8 @@ def _clean(out: dict, feeling: str) -> dict:
             "feeling": _words(out.get("feeling"))[:30],
             "phrases": [p[:40] for p in phrases],
             "title": m(out.get("title"))[:30],
+            "details": [m(x)[:20] for x in (out.get("details") or []) if str(x).strip()][:10],
+            "hooks": [m(x)[:24] for x in (out.get("hooks") or []) if str(x).strip()][:3],
             "direction": feeling,
             "_names": names}  # 서버가 받아쓴 글을 가릴 때만 쓰고 앱에는 보내지 않는다
 
@@ -237,8 +241,12 @@ def talk_lines(talk: dict | None) -> str:
         return ""
     phrases = ", ".join(f"'{p}'" for p in talk.get("phrases") or [])
     direction = talk.get("direction", "그대로")
+    details = ", ".join(talk.get("details") or [])
+    hooks = ", ".join(f"'{h}'" for h in talk.get("hooks") or [])
     return ("이 노래는 차 안에서 나눈 대화로 만든다.\n"
             f"대화 요약: {talk.get('story', '')}\n"
+            + (f"대화 속 재료(이걸로 장면을 그려): {details}\n" if details else "")
+            + (f"훅 후보(실제로 한 말 — 후렴 첫 줄로 살려): {hooks}\n" if hooks else "") +
             f"감정: {talk.get('feeling', '')} · 방향: {direction} — {FEELINGS.get(direction, FEELINGS['그대로'])}. "
             "위로·교훈·긍정적인 결말로 바꾸지 마.\n"
             + (f"대화에서 실제로 나온 표현(한두 개를 가사에 살리면 좋다, 그대로 길게 옮기지는 마): {phrases}\n" if phrases else "")
@@ -251,5 +259,7 @@ def sanitize(talk) -> dict | None:
         return None
     direction = talk.get("direction") if talk.get("direction") in FEELINGS else "그대로"
     return {"story": str(talk.get("story", ""))[:400], "feeling": str(talk.get("feeling", ""))[:30],
+            "details": [str(x)[:20] for x in (talk.get("details") or [])[:10] if isinstance(x, (str, int, float))],
+            "hooks": [str(x)[:24] for x in (talk.get("hooks") or [])[:3] if isinstance(x, (str, int, float))],
             "phrases": [str(p)[:40] for p in (talk.get("phrases") or [])[:5] if isinstance(p, (str, int, float))],
             "direction": direction}
