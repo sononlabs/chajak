@@ -662,12 +662,32 @@ class MainActivity : Activity() {
     }
 
     private var hearingState = Hearing.WAITING
+    private var hearingStage = -1
 
-    private fun setHearing(state: Hearing) {
-        if (state == hearingState && hearing.text.isNotEmpty()) return
+    /**
+     * 흥얼거린 시간 단계(2026-11-09): 0 = 5초 전, 1 = 서버가 바라는 12초 전,
+     * 2 = 30초 전, 3 = 그 뒤, 4 = 자동으로 멈추기 10초 전. 짧게 부르고 끝내면 멜로디가 모자라 노래가 단조로워진다.
+     */
+    private fun encourageStage(elapsedMs: Long) = when {
+        elapsedMs >= (MAX_RECORD_SEC - 10) * 1000L -> 4
+        elapsedMs >= 30_000 -> 3
+        elapsedMs >= 12_000 -> 2
+        elapsedMs >= 5_000 -> 1
+        else -> 0
+    }
+
+    private fun setHearing(state: Hearing, elapsedMs: Long = 0) {
+        val stage = if (musicCapturing) 0 else encourageStage(elapsedMs)
+        if (state == hearingState && stage == hearingStage && hearing.text.isNotEmpty()) return
         hearingState = state
+        hearingStage = stage
         // 음악에서 따기는 흥얼거리는 게 아니라 재생 소리를 담는다 — 문구만 음악용으로(2026-11-07 "흥얼거려 보세요"가 떴다)
-        val msg = if (musicCapturing) state.music else state.message
+        val msg = when {
+            musicCapturing -> state.music
+            state == Hearing.VOICE -> ENCOURAGE[stage]
+            state == Hearing.QUIET && stage == 0 -> QUIET_TOO_SHORT
+            else -> state.message
+        }
         // 초록(ACTIVE) 글자는 바탕 대비 2.2:1 이라 읽기 어렵다 — 글자는 진하게, 앞의 ● 점만 초록(UX 가이드 4-2)
         hearing.text = if (state == Hearing.VOICE) dot(msg, ACTIVE) else msg
         hearing.setTextColor(if (state == Hearing.VOICE) TEXT else TEXT3)
@@ -1943,6 +1963,7 @@ class MainActivity : Activity() {
      */
     private fun startMusicRecording(stack: String? = stackMode) {
         if (recording || counting || pending != null || !active) return
+        if (!prefs.getBoolean(VOICE_NOTICE_SEEN, false) && !driving) { stackMode = stack; return showVoiceNotice(music = true) }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             musicPermissionPending = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MUSIC_RECORD)
@@ -2209,12 +2230,45 @@ class MainActivity : Activity() {
             val f = File(filesDir, testInputs[testIndex++ % testInputs.size])
             return upload(f)
         }
+        if (!prefs.getBoolean(VOICE_NOTICE_SEEN, false) && !driving) return showVoiceNotice(music = false)
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
             return
         }
         if (!holdFocus()) return showError(FOCUS_DENIED)
         countdown(3)
+    }
+
+    /**
+     * 첫 녹음 전에 한 번: 녹음한 소리가 어디로 가서 무엇에 쓰이는지 알린다(2026-11-09).
+     * 사실만 적는다 — 서버로 보내 음표로 바꾸고, 곡과 녹음은 내 노래에 남고, AI 학습·공유에는 쓰지 않는다.
+     * 녹음 버튼은 녹음실과 같은 자리(탭 있는 틀) — 한 번 더 누르면 바로 녹음이 시작된다.
+     */
+    private fun showVoiceNotice(music: Boolean) {
+        fun go() {
+            prefs.edit().putBoolean(VOICE_NOTICE_SEEN, true).apply()
+            if (music) startMusicRecording() else startRecording()
+        }
+        show({
+            addView(steps(0))
+            addView(headline("녹음한 소리는 노래를 만드는 데만 써요"))
+            addView(column().apply {
+                background = round(SURFACE, 24)
+                setPadding(dp(32), dp(24), dp(32), dp(28))
+                listOf(
+                    "보내는 곳" to "녹음한 ${if (music) "음악" else "흥얼거림"}은 노래를 만드는 차작 서버로 보내 음표로 바꿔요.",
+                    "남는 것" to "만든 곡과 녹음은 '내 노래'·'내 멜로디'에 남아 다시 듣고 이어서 만들 수 있어요.",
+                    "쓰지 않는 곳" to "AI 학습에 쓰지 않고, 다른 사람에게 공유하지 않아요.",
+                ).forEachIndexed { i, (k, v) ->
+                    addView(text(k, BODY_STRONG, TEXT).withMargin(top = if (i == 0) 0 else 16))
+                    addView(text(v, BODY, TEXT2).withMargin(top = 4))
+                }
+            }.withMargin(top = 24, fill = true))
+            addView(caption("이 안내는 처음 한 번만 보여요.", TEXT3).withMargin(top = 16))
+        }, { showVoiceNotice(music) }, tabs = true) {
+            zones(button("취소") { showHome() },
+                listOf(recordButton(Rec.READY, "확인하고 녹음") { go() }))
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -2678,7 +2732,7 @@ class MainActivity : Activity() {
                             lastVoice == 0L -> Hearing.WAITING
                             nowMs - lastVoice > QUIET_MS -> Hearing.QUIET
                             else -> hearingState
-                        })
+                        }, nowMs - started)
                         // -60dB(조용) ~ -10dB(큼) 을 0~100% 로. 커질 땐 바로, 작아질 땐 천천히.
                         glow?.level(((db + 60) / 50).toFloat())
                         halo?.let {
@@ -3256,6 +3310,18 @@ class MainActivity : Activity() {
         const val FOCUS_USAGE = AudioAttributes.USAGE_ASSISTANT
         val PLAY_ATTRS: AudioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
         const val TUTORIAL_SEEN = "tutorial_seen"
+        /** 첫 녹음 전 '녹음한 소리는 노래를 만드는 데만 써요' 안내를 봤는지. */
+        const val VOICE_NOTICE_SEEN = "voice_notice_seen"
+        /** 잘 들릴 때의 문구 — 흥얼거린 시간 단계(encourageStage)별. 앞의 ● 만 초록. */
+        val ENCOURAGE = listOf(
+            "●  잘 들려요 — 계속 흥얼거려 주세요",
+            "●  잘 들려요 — 거의 됐어요, 조금만 더",
+            "●  좋아요 — 한 소절 더 부르면 노래가 풍성해져요",
+            "●  아주 좋아요 — 다 불렀으면 가운데 버튼을 누르세요",
+            "●  곧 녹음이 끝나요 — 마무리해 주세요",
+        )
+        /** 5초도 안 돼 조용해졌을 때 — 3초 미만은 노래로 만들 수 없다. */
+        const val QUIET_TOO_SHORT = "조금 더 흥얼거려 주세요. 5초 넘게 불러야 노래로 만들 수 있어요."
         const val REQ_EXPORT_RECORDING = 5
         const val DEFAULT_INPUT = "기본 마이크(차가 고름)"
         val STEPS = listOf("흥얼거리기", "내 멜로디", "노래 만들기", "완성")
