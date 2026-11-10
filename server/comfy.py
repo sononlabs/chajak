@@ -42,6 +42,7 @@ NO_VOICE_HINTS = ("음성 구간을 찾지 못",)
 
 DOWN_WAIT = 300  # ComfyUI 재시작(모델 다시 올리기 포함)을 기다리는 최대 시간(초)
 FREE_WAIT = 3  # /free 가 처리될 틈(초)
+MAX_WAIT = 1500  # 작업 하나를 기다리는 최대 시간(초). 넘으면 ComfyUI 에서 지우고 실패로(전에는 영원히 기다려 노래 대기열 전체가 멈출 수 있었다)
 
 
 class ComfyError(RuntimeError):
@@ -126,7 +127,7 @@ class Comfy:
         except Exception as e:
             print("ComfyUI 메모리 비우기 실패(계속 진행):", e, flush=True)
 
-    async def run(self, prompt: dict, front: bool = False, poll: float = 0.15, retries: int = 1) -> dict:
+    async def run(self, prompt: dict, front: bool = False, poll: float = 0.15, retries: int = 1, max_wait: float = MAX_WAIT) -> dict:
         """그래프를 실행하고 history 항목의 outputs 를 돌려준다. front=True 면 대기열 맨 앞에 넣는다.
         도중에 ComfyUI 가 재시작돼 작업이 사라지면(대기열·기록 어디에도 없음) 한 번 다시 넣는다 — 전에는 기록을 영원히 기다려 대기열 전체가 멈췄다."""
         for attempt in range(retries + 1):
@@ -134,7 +135,7 @@ class Comfy:
             if "prompt_id" not in j:
                 raise ComfyError(f"ComfyUI 가 요청을 거부했습니다: {j.get('error', j)}")
             pid = j["prompt_id"]
-            item = await self._wait(pid, poll)
+            item = await self._wait(pid, poll, max_wait)
             if item is not None:
                 break
             if attempt == retries:
@@ -146,22 +147,44 @@ class Comfy:
                 raise ComfyError(text.strip(), msg.get("node_type", ""))
         return item["outputs"]
 
-    async def _wait(self, pid: str, poll: float) -> dict | None:
-        """기록에 나오면 그 항목, 대기열·기록 어디에도 없으면(재시작·대기열 비우기) None."""
+    async def _wait(self, pid: str, poll: float, max_wait: float = MAX_WAIT) -> dict | None:
+        """기록에 나오면 그 항목, 대기열·기록 어디에도 없으면(재시작·대기열 비우기) None. max_wait 를 넘기면 지우고 ComfyError."""
         loop = asyncio.get_running_loop()
-        next_check = loop.time() + 5
+        t0 = loop.time()
+        next_check = t0 + 5
         while True:
             h = await self._call("GET", f"/history/{pid}")
             if pid in h:
                 return h[pid]
-            if loop.time() >= next_check:
-                next_check = loop.time() + 5
+            now = loop.time()
+            if now - t0 > max_wait:
+                await self._cancel(pid)
+                raise ComfyError(f"ComfyUI 작업이 {int(max_wait)}초 안에 끝나지 않아 멈췄습니다")
+            if now >= next_check:
+                next_check = now + 5
                 q = await self._call("GET", "/queue")
                 ids = {t[1] for t in q.get("queue_running", []) + q.get("queue_pending", []) if len(t) > 1}
                 if pid not in ids:
-                    h = await self._call("GET", f"/history/{pid}")  # 막 끝난 경우
-                    return h.get(pid)
+                    # 막 끝났거나 실패한 경우 기록이 조금 늦게 보일 수 있다 — 2초 동안 몇 번 더 본다
+                    # (11-11: 실패한 작업을 '사라짐'으로 보고 한 번 더 넣었다)
+                    for _ in range(5):
+                        await asyncio.sleep(0.4)
+                        h = await self._call("GET", f"/history/{pid}")
+                        if pid in h:
+                            return h[pid]
+                    return None
             await asyncio.sleep(poll)
+
+    async def _cancel(self, pid: str):
+        """기다리다 포기한 작업을 ComfyUI 에서도 멈춘다(돌고 있으면 interrupt, 대기 중이면 대기열에서 지움)."""
+        try:
+            q = await self._call("GET", "/queue")
+            if any(len(t) > 1 and t[1] == pid for t in q.get("queue_running", [])):
+                await self._call("POST", "/interrupt")
+            else:
+                await self._call("POST", "/queue", json={"delete": [pid]})
+        except Exception as e:
+            print("ComfyUI 작업 멈추기 실패:", e, flush=True)
 
     async def fetch_image(self, outputs: dict, node: str) -> bytes:
         return await self.fetch_audio(outputs, node, kind="images")

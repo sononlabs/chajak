@@ -11,10 +11,12 @@ import argparse
 import asyncio
 import io
 import json
+import os
 import re
 import shutil
 import sys
 import time
+import traceback
 import uuid
 from pathlib import Path
 
@@ -84,7 +86,14 @@ class Store:
     def save(self, song: dict):
         d = self.root / song["id"]
         d.mkdir(exist_ok=True)
-        (d / "song.json").write_text(json.dumps(song, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_atomic(d / "song.json", json.dumps(song, ensure_ascii=False, indent=2))
+
+
+def _write_atomic(path: Path, text: str):
+    """임시 파일에 다 쓴 뒤 바꿔 끼운다 — 쓰는 도중 서버가 꺼져도 song.json·jobs.json 이 반쯤 잘리지 않게(2026-11-11, 44번 #6)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _read(data: bytes) -> np.ndarray:
@@ -188,7 +197,10 @@ async def _form(request: web.Request) -> tuple[bytes, str, dict]:
 
 async def _json(request: web.Request) -> dict:
     """JSON 본문(객체만). 비어 있으면 {}."""
-    body = await request.json() if request.can_read_body else {}
+    try:
+        body = await request.json() if request.can_read_body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ApiError(400, "BAD_JSON", "JSON 본문을 읽지 못했어요.")
     if not isinstance(body, dict):
         raise ApiError(400, "BAD_JSON", "JSON 본문은 객체({...})여야 해요.")
     return body
@@ -236,7 +248,8 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
     except C.ComfyError as e:
         if e.kind in HUM_ERRORS:
             raise ApiError(422, *HUM_ERRORS[e.kind]) from e
-        raise ApiError(502, "ENGINE_ERROR", f"생성 엔진 오류: {e}") from e
+        print(f"생성 엔진 오류: {e}", flush=True)
+        raise ApiError(502, "ENGINE_ERROR", ENGINE_MSG) from e
     audio = await cf.fetch_audio(outputs, "save")
     abc = C.text(front if fine else outputs, "abc_out")
     info = C.text(outputs, "render_info")
@@ -364,7 +377,8 @@ async def _add_variation(request, store: Store, song: dict, body: dict):
                                                      source["transpose"], f"chajak_server/{song['id']}_{n}"), front=True)
             var_info = C.text(outputs, "var_info")
     except C.ComfyError as e:
-        raise ApiError(502, "ENGINE_ERROR", f"생성 엔진 오류: {e}") from e
+        print(f"생성 엔진 오류: {e}", flush=True)
+        raise ApiError(502, "ENGINE_ERROR", ENGINE_MSG) from e
     audio = await cf.fetch_audio(outputs, "save")
     out_abc = C.text(outputs, "abc_out")
     info = C.text(outputs, "render_info")
@@ -434,7 +448,6 @@ async def delete_song(request):
         raise ApiError(409, "BUSY", "이 곡으로 노래를 만드는 중이에요. 다 만든 뒤에 지워 주세요.")
     async with store.lock(song_id):
         shutil.rmtree(d, ignore_errors=True)
-    store._locks.pop(song_id, None)
     copies = _purge_comfy(song_id)
     for jid in [k for k, j in request.app["jobs"].items() if j.get("song_id") == song_id]:  # 작업 기록에 남은 가사·주제도
         request.app["jobs"].pop(jid, None)
@@ -480,8 +493,12 @@ async def list_songs(request):
     dirs = sorted((d for d in store.root.iterdir() if (d / "song.json").exists()), key=lambda d: (d / "song.json").stat().st_mtime, reverse=True)
     out = []
     for d in dirs[:limit]:
-        s = json.loads((d / "song.json").read_text(encoding="utf-8"))
-        v = song_view(s) if s.get("final") else None
+        try:
+            s = json.loads((d / "song.json").read_text(encoding="utf-8"))
+            v = song_view(s) if s.get("final") else None
+        except Exception as e:
+            print(f"곡 목록에서 건너뜀 {d.name}: {e}", flush=True)
+            continue
         first = (s.get("tracks") or [None])[0]
         try:
             m = first and melody_mood.analyze(melody_notes.notes(first), first["tempo"], None, first.get("key"), first.get("transpose", 0),
@@ -582,7 +599,7 @@ async def start_ai(request):
     job = {"id": job_id, "song_id": song["id"], "status": "queued", "lyrics": use_lyrics,
            "eta_sec": None, "eta_max_sec": None, "created": time.time()}
     request.app["jobs"][job_id] = job
-    request.app["ai_tasks"].add(asyncio.create_task(_run_ai(request.app, job, song, lyrics)))
+    _spawn(request.app, (_run_ai(request.app, job, song, lyrics)))
     return web.json_response(job, status=202)
 
 
@@ -604,14 +621,15 @@ async def _run_ai(app, job: dict, song: dict, lyrics: str):
         audio = await cf.fetch_audio(outputs, "save")
         d = store.dir(song["id"])
         (d / "ai.flac").write_bytes(audio)
-        fresh = store.load(song["id"])
-        fresh["ai"] = {"lyrics": job["lyrics"], "vocal_check": check, "vocal_leak": leaked, "attempts": attempt,
-                       "seconds": round(time.time() - job["created"], 1), "file": "ai.flac"}
-        store.save(fresh)
+        async with store.lock(song["id"]):
+            fresh = store.load(song["id"])
+            fresh["ai"] = {"lyrics": job["lyrics"], "vocal_check": check, "vocal_leak": leaked, "attempts": attempt,
+                           "seconds": round(time.time() - job["created"], 1), "file": "ai.flac"}
+            store.save(fresh)
         job.update(status="done", vocal_leak=leaked, attempts=attempt, audio_url=f"/v1/songs/{song['id']}/ai/audio",
                    seconds=fresh["ai"]["seconds"])
     except Exception as e:
-        job.update(status="failed", error=str(e)[:300])
+        job.update(status="failed", error=_fail_message(e, "AI 편곡을 만들지 못했어요."))
 
 
 async def themes(request):
@@ -674,7 +692,7 @@ async def start_final(request):
     store: Store = request.app["store"]
     song = store.load(request.match_info["song_id"])
     body = await _json(request)
-    prompt = str(body.get("prompt", "")).strip() or lyrics.random_theme()
+    prompt = str(body.get("prompt", "")).strip() or _talk_theme(body) or lyrics.random_theme()
     opts = {"seconds": float(min(180, max(60, float(body.get("seconds", FINAL_SECONDS))))),
             "voice": _option(body, "voice", VOICES, "auto"),
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
@@ -702,8 +720,14 @@ async def start_final(request):
            "options": opts, "from": base["id"] if base else None, "eta_sec": FINAL_ETA(opts["seconds"]), "created": time.time(),
            "_remix": remix}
     request.app["jobs"][job_id] = job
-    request.app["ai_tasks"].add(asyncio.create_task(_run_final(request.app, job, song)))
+    _spawn(request.app, (_run_final(request.app, job, song)))
     return web.json_response({k: v for k, v in job.items() if k != "_remix"}, status=202)
+
+
+def _talk_theme(body: dict) -> str:
+    """주제를 비우고 대화를 넣었으면 대화 이야기를 주제로(무작위 주제가 대화와 어긋났다 — 2026-11-11)."""
+    t = body.get("talk") if isinstance(body.get("talk"), dict) else None
+    return str(t.get("theme") or t.get("story") or "").strip()[:80] if t else ""
 
 
 def _avoid(song: dict) -> list[str]:
@@ -747,6 +771,9 @@ async def _run_final(app, job: dict, song: dict):
             job["created"] = time.time()  # 진행 막대·남은 시간은 실제로 시작한 때부터
             job["stage"] = "melody"
             await _run_final_now(app, job, song)
+    except Exception as e:
+        if job.get("status") not in ("done", "failed"):
+            job.update(status="failed", error=_fail_message(e, "노래를 만들지 못했어요."))
     finally:
         if job["id"] in waiting:
             waiting.remove(job["id"])
@@ -848,7 +875,8 @@ async def _run_final_now(app, job: dict, song: dict):
         # 곡을 다시 읽어 버전을 붙인다 — 만드는 동안 쌓은 트랙을 지우지 않게, 잠근 채로
         async with store.lock(song["id"]):
             fresh = store.load(song["id"])
-            final = {"id": job["id"], "parent": base["id"] if base else None, "reference": reference, "prompt": job["prompt"], "options": opts, "weights": w,
+            kept = {k: v for k, v in opts.items() if k != "talk"} | ({"talk_used": True} if opts.get("talk") else {})
+            final = {"id": job["id"], "parent": base["id"] if base else None, "reference": reference, "prompt": job["prompt"], "options": kept, "weights": w,
                      "title": words["title"], "style": style, "scene": words["cover"],
                      "lyrics": words["sections"] if sung else {}, "lyrics_text": text, "syllable_miss": words["miss"], "plan": plan, "seed": seed,
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
@@ -861,7 +889,7 @@ async def _run_final_now(app, job: dict, song: dict):
             store.save(fresh)
         job.update(status="done", stage="done", seconds=final["seconds"])
     except Exception as e:
-        job.update(status="failed", error=str(e)[:300])
+        job.update(status="failed", error=_fail_message(e, "노래를 만들지 못했어요."))
 
 
 def _final(request) -> tuple[Path, dict]:
@@ -907,7 +935,7 @@ async def talk_upload(request):
         jobs.pop(k, None)
     tid = uuid.uuid4().hex[:12]
     jobs[tid] = {"id": tid, "status": "running", "stage": "decode", "direction": direction, "created": now, "eta_sec": 30}
-    request.app["ai_tasks"].add(asyncio.create_task(_run_talk(request.app, tid, data, direction)))
+    _spawn(request.app, (_run_talk(request.app, tid, data, direction)))
     return _json_ok({"id": tid, "status": "running", "stage": "decode"}, status=202)
 
 
@@ -945,7 +973,7 @@ async def _run_talk(app, tid: str, data: bytes, direction: str):
     except ApiError as e:
         job.update(status="error", error_code=e.code, error=e.message)
     except Exception as e:
-        job.update(status="error", error_code="SERVER_ERROR", error=f"대화를 분석하지 못했어요: {e}")
+        job.update(status="error", error_code="SERVER_ERROR", error=_fail_message(e, "대화를 분석하지 못했어요."))
 
 
 async def talk_status(request):
@@ -980,7 +1008,7 @@ async def write_lyrics(request):
     if not song.get("tracks"):
         raise ApiError(409, "NO_MELODY", "이 곡에는 멜로디가 없어요.")
     body = await _json(request)
-    prompt = str(body.get("prompt", "")).strip() or lyrics.random_theme()
+    prompt = str(body.get("prompt", "")).strip() or _talk_theme(body) or lyrics.random_theme()
     seconds = float(min(180, max(60, float(body.get("seconds", FINAL_SECONDS)))))
     first = song["tracks"][0]
     src = first["abc"]
@@ -1054,19 +1082,44 @@ async def hum_audio(request):
     return web.FileResponse(found[0], headers={"Content-Type": kind.get(found[0].suffix.lower(), "application/octet-stream")})
 
 
+ENGINE_MSG = "생성 엔진에서 문제가 생겼어요. 잠시 후 다시 시도해 주세요."
+# aiohttp 가 직접 내는 오류(라우트 없음·메서드·본문 크기)도 같은 {"error": {code, message}} 형식으로(2026-11-11, 44번 #3)
+HTTP_ERRORS = {400: ("BAD_REQUEST", "요청을 읽지 못했어요."), 404: ("NOT_FOUND", "찾는 주소가 없어요."),
+               405: ("METHOD_NOT_ALLOWED", "이 주소에서는 쓸 수 없는 요청이에요."),
+               413: ("TOO_LARGE", "보낸 파일이 너무 커요(20MB 이하).")}
+
+
+def _fail_message(e: Exception, default: str) -> str:
+    """작업 실패를 앱에 보일 문장으로. 앱용 오류(ApiError)만 그대로, 나머지는 기본 문장 — 원문(경로·예외)은 서버 로그에만."""
+    if isinstance(e, ApiError):
+        return e.message
+    if isinstance(e, C.ComfyError) and e.kind in HUM_ERRORS:
+        return HUM_ERRORS[e.kind][1]
+    print(f"작업 실패: {type(e).__name__}: {e}", flush=True)
+    traceback.print_exception(e)
+    return default + " 잠시 후 다시 시도해 주세요."
+
+
+def _error_json(status: int, code: str, message: str) -> web.Response:
+    return web.json_response({"error": {"code": code, "message": message}}, status=status,
+                             dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
 @web.middleware
 async def errors(request, handler):
     try:
         return await handler(request)
-    except web.HTTPException:
-        raise
-    except Exception as e:
-        if isinstance(e, json.JSONDecodeError):
-            e = ApiError(400, "BAD_JSON", "JSON 본문을 읽지 못했어요.")
-        elif not isinstance(e, ApiError):
-            e = ApiError(500, "SERVER_ERROR", f"서버 오류: {e}")
-        return web.json_response({"error": {"code": e.code, "message": e.message}}, status=e.status,
-                                 dumps=lambda o: json.dumps(o, ensure_ascii=False))
+    except ApiError as e:
+        return _error_json(e.status, e.code, e.message)
+    except web.HTTPException as h:
+        if h.status < 400:  # 리다이렉트 등은 그대로
+            raise
+        code, message = HTTP_ERRORS.get(h.status, ("HTTP_ERROR", "요청을 처리하지 못했어요."))
+        return _error_json(h.status, code, message)
+    except Exception as e:  # 예상 못 한 오류: 원문은 서버 로그에만(경로·내부 값이 앱으로 나가지 않게)
+        print(f"서버 오류 {request.method} {request.path}: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exception(e)
+        return _error_json(500, "SERVER_ERROR", "서버에서 문제가 생겼어요. 잠시 후 다시 시도해 주세요.")
 
 
 JOBS_FILE = STORAGE / "jobs.json"
@@ -1076,8 +1129,9 @@ def _save_jobs(jobs: dict):
     """작업 상태를 파일로(숨은 _ 값은 빼고). 서버를 다시 켜도 앱이 작업 결과를 물을 수 있게."""
     try:
         recent = sorted(jobs.values(), key=lambda j: j.get("created", 0))[-200:]
-        JOBS_FILE.write_text(json.dumps({j["id"]: {k: v for k, v in j.items() if not k.startswith("_")} for j in recent},
-                                        ensure_ascii=False), encoding="utf-8")
+        _write_atomic(JOBS_FILE, json.dumps({j["id"]: {k: v for k, v in j.items() if not k.startswith("_") and k != "options"}
+                                            | {"options": {k: v for k, v in j.get("options", {}).items() if k != "talk"}}
+                                            for j in recent}, ensure_ascii=False))
     except Exception as e:  # 저장 실패가 서버를 멈추면 안 된다
         print("작업 저장 실패:", e)
 
@@ -1094,10 +1148,21 @@ def _load_jobs() -> dict:
     return jobs
 
 
+def _spawn(app, coro_tuple):
+    """백그라운드 작업 시작. 끝나면 ai_tasks 에서 빠진다(44번 #17)."""
+    t = asyncio.create_task(coro_tuple[0] if isinstance(coro_tuple, tuple) else coro_tuple)
+    app["ai_tasks"].add(t)
+    t.add_done_callback(app["ai_tasks"].discard)
+    return t
+
+
 async def _save_jobs_forever(app):
     last = ""
     while True:
         await asyncio.sleep(3)
+        t = time.time()
+        for k in [k for k, j in app["talk_jobs"].items() if t - j["created"] > TALK_TTL_SEC]:
+            app["talk_jobs"].pop(k, None)
         now = json.dumps([(j.get("id"), j.get("status"), j.get("stage")) for j in app["jobs"].values()])
         if now != last:
             _save_jobs(app["jobs"])

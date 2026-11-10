@@ -11,7 +11,20 @@ import os
 import sys
 from pathlib import Path
 
-NODES = Path(os.environ.get("CHAJAK_NODES", r"F:\StabilityMatrix-win-x64\Data\Packages\ComfyUI\custom_nodes\pleos_melody_instrument"))
+def _nodes_dir() -> Path:
+    """노드 폴더: CHAJAK_NODES → 제출 저장소의 comfyui-node(서버 폴더 옆) → 서버를 돌리는 ComfyUI venv 의 custom_nodes.
+    전에는 이 PC 의 절대경로만 봐서 다른 PC 에서는 서버가 아예 켜지지 않았다(44번 #8)."""
+    here = Path(__file__).resolve().parent
+    cands = [Path(os.environ["CHAJAK_NODES"])] if os.environ.get("CHAJAK_NODES") else []
+    cands += [here.parent / "comfyui-node" / "pleos_melody_instrument",
+              Path(sys.executable).resolve().parents[2] / "custom_nodes" / "pleos_melody_instrument"]
+    for c in cands:
+        if (c / "abc_events.py").exists():
+            return c
+    raise RuntimeError("pleos_melody_instrument 노드 폴더를 찾지 못했어요. CHAJAK_NODES 환경변수로 알려 주세요: " + ", ".join(map(str, cands)))
+
+
+NODES = _nodes_dir()
 
 _spec = importlib.util.spec_from_file_location("pleos_abc_events", NODES / "abc_events.py")
 abc_events = importlib.util.module_from_spec(_spec)
