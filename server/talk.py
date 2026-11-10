@@ -1,7 +1,7 @@
 """대화로 가사 만들기(저니맵 02): 차 안 대화 녹음 → 받아쓰기(faster-whisper) → 노래 이야기로 정리(로컬 LLM).
 
 - 녹음 파일은 받아쓴 뒤 저장하지 않는다(메모리에서만 다룬다).
-- 사람 이름·회사·학교·전화번호 같은 고유한 정보는 정리할 때 '그 사람'·'회사' 같은 말로 바꾼다.
+- 사람 이름은 대화에 나온 그대로 살린다(2026-11-11 사용자: 이름이 직접 나와야 재미있다). 전화번호·주소만 뺀다.
 - 사용자가 고른 방향(느낀 그대로·통쾌하게·담담하게·유쾌하게)을 지키고, 위로·교훈·긍정적인 결말로 바꾸지 않는다.
 """
 from __future__ import annotations
@@ -149,7 +149,7 @@ def _digest_prompt(transcript: str, feeling: str) -> str:
         "규칙:\n"
         "- 대화에 없는 사건을 지어내지 않는다.\n"
         "- 받아쓰기가 잘못 알아들은 것 같은 낱말(문맥에 안 맞는 낱말)은 문맥에 맞는 말로 바로잡아 쓴다.\n"
-        "- 사람 이름·회사·학교·가게 이름·전화번호·주소는 '그 사람', '팀장님', '회사'처럼 바꾼다.\n"
+        "- 사람 이름·별명은 대화에 나온 그대로 쓴다(누가 무엇을 했는지가 노래의 재미다). 전화번호·주소는 쓰지 않는다.\n"
         "- 욕설은 순화하되 감정의 세기는 줄이지 않는다.\n"
         "- 위로·교훈·'힘내자' 같은 긍정적인 결말을 덧붙이지 않는다.\n"
         "- 대화가 길면 정보(숫자·전문 용어)보다 마음이 움직인 순간 — 기대·걱정·웃음·다짐·소중한 사람 — 을 중심으로 고른다.\n"
@@ -159,30 +159,13 @@ def _digest_prompt(transcript: str, feeling: str) -> str:
         '"theme": 노래 주제 한 줄(언제·누가·무슨 일·어떤 마음, 40자 안팎), '
         '"story": 무슨 일이 있었는지 2~3문장, '
         '"feeling": 이 노래의 감정 낱말 1~2개, '
-        '"phrases": 대화에서 실제로 나온 말 중 가사에 살리면 좋을 짧은 표현 3~5개(배열, 고유한 정보는 바꿔서), '
+        '"phrases": 대화에서 실제로 나온 말 중 가사에 살리면 좋을 짧은 표현 3~5개(배열), '
         '"details": 대화에 나온 구체적인 사물·장면·행동 6~10개(배열, 짧은 낱말·구. 예: 장면을 그릴 수 있는 것), '
         '"hooks": 후렴 첫 줄이 될 만한, 대화에서 실제로 나온 짧은 말 2~3개(배열, 띄어쓰기 빼고 10자 안팎), '
         '"title": 노래 제목 후보(짧게), '
-        '"names": 대화에 나온 사람 이름·회사·가게 이름을 받아쓴 그대로(배열, 없으면 [])}\n'
+        '"names": 대화에 나온 사람 이름·별명(받아쓰기 오류는 바로잡아서, 배열, 없으면 [])}\n'
         f"대화:\n{transcript}"
     )
-
-
-# 이름 가리기는 LLM 에만 맡기지 않는다(2026-11-10: 같은 대화에서 한 번은 가리고 한 번은 '김 팀장님'을 그대로 썼다).
-# ① 성(+이름) + 직함 → 직함만  ② LLM 이 찾아 준 이름 → '그 사람'
-TITLES = "팀장|부장|과장|차장|대리|사장|실장|본부장|이사|상무|전무|주임|선배|후배|선생|교수|원장|반장|매니저|대표"
-_TITLE_NAME = re.compile(rf"(?<![가-힣])[가-힣]{{1,3}}\s?(?=(?:{TITLES})(?:님)?(?![가-힣]{{2}}))")
-_KEEP_BEFORE = {"우리", "그", "새", "옆", "윗", "전", "다른", "저", "이"}
-
-
-_GENERIC = re.compile(rf"^(?:{TITLES}|사장|신랑|신부|남편|아내|엄마|아빠|선생|기사|고객|손님)(?:님)?$")
-
-
-def _mask(text: str, names: list[str]) -> str:
-    # '사장님'·'신랑' 같은 부르는 말은 이름이 아니다(15분 실측 대화에서 '사장님'이 '그 사람'으로 바뀌었다)
-    for n in sorted({n for n in names if len(n) >= 2 and not _GENERIC.match(n.replace(" ", ""))}, key=len, reverse=True):
-        text = text.replace(n, "그 사람")
-    return _TITLE_NAME.sub(lambda m: m.group(0) if m.group(0).strip() in _KEEP_BEFORE else "", text)
 
 
 def _words(v) -> str:
@@ -194,7 +177,7 @@ def _words(v) -> str:
 
 def _clean(out: dict, feeling: str) -> dict:
     names = [str(n).strip() for n in (out.get("names") or []) if isinstance(n, (str, int)) and str(n).strip()]
-    m = lambda s: _mask(str(s or "").strip(), names)
+    m = lambda s: str(s or "").strip()
     # 부르기 어려운 긴 문장은 뺀다(띄어쓰기 빼고 16자 넘게)
     phrases = [m(p) for p in (out.get("phrases") or []) if str(p).strip() and len(str(p).replace(" ", "")) <= 16][:5]
     return {"enough": out.get("enough") is not False,
@@ -206,7 +189,7 @@ def _clean(out: dict, feeling: str) -> dict:
             "details": [m(x)[:20] for x in (out.get("details") or []) if str(x).strip()][:10],
             "hooks": [m(x)[:24] for x in (out.get("hooks") or []) if str(x).strip()][:3],
             "direction": feeling,
-            "_names": names}  # 서버가 받아쓴 글을 가릴 때만 쓰고 앱에는 보내지 않는다
+            "names": names[:8]}
 
 
 class DigestError(Exception):
@@ -242,6 +225,7 @@ def talk_lines(talk: dict | None) -> str:
     phrases = ", ".join(f"'{p}'" for p in talk.get("phrases") or [])
     direction = talk.get("direction", "그대로")
     details = ", ".join(talk.get("details") or [])
+    names = [str(n) for n in talk.get("names") or []]
     hooks = ", ".join(f"'{h}'" for h in talk.get("hooks") or [])
     return ("이 노래는 차 안에서 나눈 대화로 만든다.\n"
             f"대화 요약: {talk.get('story', '')}\n"
@@ -250,7 +234,7 @@ def talk_lines(talk: dict | None) -> str:
             f"감정: {talk.get('feeling', '')} · 방향: {direction} — {FEELINGS.get(direction, FEELINGS['그대로'])}. "
             "위로·교훈·긍정적인 결말로 바꾸지 마.\n"
             + (f"대화에서 실제로 나온 표현(한두 개를 가사에 살리면 좋다, 그대로 길게 옮기지는 마): {phrases}\n" if phrases else "")
-            + "사람 이름·회사 같은 고유한 정보는 쓰지 마.\n")
+            + (f"대화에 나온 사람: {', '.join(names)} — 이름을 가사에 직접 불러 주면 더 재밌다(억지로 다 넣지는 마).\n" if names else ""))
 
 
 def sanitize(talk) -> dict | None:
@@ -262,4 +246,5 @@ def sanitize(talk) -> dict | None:
             "details": [str(x)[:20] for x in (talk.get("details") or [])[:10] if isinstance(x, (str, int, float))],
             "hooks": [str(x)[:24] for x in (talk.get("hooks") or [])[:3] if isinstance(x, (str, int, float))],
             "phrases": [str(p)[:40] for p in (talk.get("phrases") or [])[:5] if isinstance(p, (str, int, float))],
+            "names": [str(n)[:12] for n in (talk.get("names") or [])[:8] if isinstance(n, (str, int))],
             "direction": direction}

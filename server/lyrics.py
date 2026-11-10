@@ -36,8 +36,35 @@ THEMES = [
 ]
 
 
+# 섞어 만드는 주제(2026-11-11 사용자: 요일·시간으로 미리 채우니 곡이 다 비슷하다) — 장면 × 분위기·장르로 수백 가지.
+SCENES = [
+    "비 오는 밤 퇴근길", "주말 아침 바닷가로 가는 길", "첫눈 오는 날 고향 가는 길", "새벽 고속도로", "벚꽃 터널을 지나는 봄날",
+    "아이와 함께 가는 소풍길", "노을 지는 해안도로", "오래된 친구를 만나러 가는 길", "야근 끝 텅 빈 도심", "단풍 든 산길",
+    "여름밤 창문 열고 달리는 길", "막히는 출근길", "면접 보러 가는 길", "이사 가는 날 짐을 싣고", "캠핑장으로 떠나는 금요일 저녁",
+    "공항 가는 새벽길", "시험 끝나고 집에 가는 길", "첫 차를 산 날", "비 갠 오후 한강 다리 위", "눈 내리는 산 속 휴게소",
+    "엄마 생일 케이크를 싣고", "혼자 떠나는 즉흥 여행", "졸업식 끝나고 돌아오는 길", "안개 낀 호숫가 도로", "축구 경기 보고 오는 길",
+    "강아지와 함께 가는 공원길", "퇴사한 날 마지막 퇴근길", "해 뜨는 동해 가는 길", "크리스마스 불빛 거리", "할머니 댁 가는 시골길",
+]
+VIBES = [
+    "잔잔한 시티팝", "상쾌한 어쿠스틱 팝", "따뜻한 발라드", "신나는 신스팝", "설레는 인디 팝", "통통 튀는 동요풍",
+    "몽글몽글한 로파이", "그리운 포크", "위로가 되는 R&B", "여유로운 재즈", "청량한 밴드 사운드", "힘이 나는 펑키 팝",
+    "웅장한 록", "통쾌한 힙합", "몽환적인 드림팝", "흥겨운 트로트", "느긋한 보사노바", "가슴 뛰는 EDM",
+]
+
+
 def random_theme() -> str:
-    return random.choice(THEMES)
+    """직접 쓴 주제 반, 장면 × 분위기 조합 반."""
+    if random.random() < 0.5:
+        return random.choice(THEMES)
+    return f"{random.choice(SCENES)}, {random.choice(VIBES)}"
+
+
+def theme_examples(n: int = 4) -> list[str]:
+    """앱이 주제 칸 아래 보여 줄 예시(서로 다른 장면)."""
+    out, scenes = [], random.sample(SCENES, n)
+    for sc in scenes:
+        out.append(f"{sc}, {random.choice(VIBES)}")
+    return out
 
 
 def _syllables(line: str) -> int:
@@ -302,14 +329,14 @@ CLICHES = "눈물, 영원, 그대, 사랑해, 운명, 별빛, 가슴이 아파, 
 
 LYRIC_CRAFT = (
     "잘 쓴 가사의 조건:\n"
-    "- 차 안에서 보이고 들리는 구체적인 것(와이퍼, 신호등, 라디오, 창밖 불빛, 핸들 쥔 손)으로 장면을 그린다. 추상어만 늘어놓지 않는다.\n"
+    "- 보이고 들리고 만져지는 구체적인 것으로 장면을 그린다(아래 '이번 곡의 소재 예'처럼, 주제에 맞는 것으로). 추상어만 늘어놓지 않는다.\n"
     "- 줄마다 완결된 말로 끝낸다(~해, ~네, ~요, ~지, 명사). '떠올리', '지나가' 처럼 끊긴 말 금지.\n"
     "- 말하듯 자연스러운 한국어 문장으로 쓴다. 조사(이·가·을·를·에·은·는·도)를 빼고 낱말만 늘어놓지 않는다('핸들 바람 가볍게' 같은 줄 금지 → '핸들 위로 바람이 가벼워').\n"
     "- 후렴 첫 줄은 훅이다. 후렴 안에서 한 번 더 되풀이해도 좋다. 짧고 입에 붙게.\n"
     "- 같은 구간의 줄 끝소리를 비슷하게 맞추면(~해/~해, ~네/~네) 부르기 좋다.\n"
     f"- 흔한 말은 피한다: {CLICHES}.\n"
     "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다.\n"
-    "예(형식만 참고. 이 예의 낱말·문장은 절대 쓰지 마): 절 '와이퍼가 박자 맞춰'(8) / '빨간불에 멈춘 숨'(7)."
+    "예(형식만 참고. 이 예의 낱말·문장은 절대 쓰지 마): 절 '창문 내리면 바람이'(8) / '손끝이 먼저 알아'(7)."
 )
 
 
@@ -323,7 +350,7 @@ LYRIC_CRAFT_TALK = (
     "- 줄마다 완결된 말로 끝낸다(~해, ~네, ~요, ~지, 명사). 말하듯 자연스러운 한국어 문장, 조사를 빼고 낱말만 늘어놓지 않는다.\n"
     "- 같은 구간의 줄 끝소리를 비슷하게 맞추면 부르기 좋다.\n"
     f"- 흔한 말은 피한다: {CLICHES}.\n"
-    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 사람 이름·회사 같은 고유한 정보는 쓰지 않는다."
+    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 대화에 나온 사람 이름은 그대로 불러도 좋다. 전화번호·주소는 쓰지 않는다."
 )
 
 
@@ -336,7 +363,7 @@ RAP_CRAFT = (
     "- 훅(후렴)은 짧고(10자 안팎) 되풀이하기 쉽게, 두 번 불러도 질리지 않게.\n"
     "- 2벌스는 1벌스에서 한 걸음 더 나아간다(같은 말 되풀이 금지).\n"
     f"- 흔한 말은 피한다: {CLICHES}. 욕설·비하 금지(감정의 세기는 살린다).\n"
-    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 사람 이름·회사 같은 고유한 정보는 쓰지 않는다.\n"
+    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 대화에 나온 사람 이름은 그대로 불러도 좋다. 전화번호·주소는 쓰지 않는다.\n"
     "- 작법 용어를 가사에 쓰지 않는다: '랩', '펀치라인', '각운', '라임', '비트', '멜로디' 같은 말 대신 이야기 속 장면과 감정으로 말한다."
 )
 RAP_STYLE = "korean hip hop, rap, boom bap beat, punchy drums, deep bass, fast rap flow, confident delivery"
@@ -379,6 +406,33 @@ def rap_text(sections: dict) -> str:
     return "\n\n".join(f"[{k}]\n" + "\n".join(v) for k, v in blocks if v)
 
 
+# 소재 예시 — 매번 이 중 몇 개만 보여 준다(고정 예시 '와이퍼·신호등·라디오'를 모든 곡이 쓰던 문제, 2026-11-11)
+DETAIL_POOL = [
+    "창문 틈 바람", "식은 커피 컵", "뒷좌석 가방", "주머니 속 영수증", "휴게소 호두과자", "톨게이트 불빛", "터널 끝 하얀 빛",
+    "차창에 김 서림", "운동화 끈", "열쇠고리 방울", "선글라스 자국", "가로수 그림자", "강물 위 다리", "버스 정류장 사람들",
+    "편의점 불빛", "빗방울 맺힌 거울", "트렁크 속 우산", "조수석 빈자리", "휴대폰 진동", "카시트 위 인형", "도시락 냄새",
+    "바닷바람 짠내", "산길 굽이", "논두렁 허수아비", "공항 활주로", "빵집 앞 줄", "놀이터 그네", "골목 고양이",
+    "새 신발 냄새", "낡은 앨범", "손바닥 땀", "첫 월급 봉투", "졸업 꽃다발", "이삿짐 상자", "캠핑 의자", "붕어빵 봉투",
+]
+# 이야기 시점·형식 — 같은 주제라도 다른 노래가 되게
+ANGLES = [
+    "지금 이 순간을 혼자 중얼거리는 독백", "옆자리 사람에게 건네는 말", "오래전 그날을 떠올리는 회상", "미래의 나에게 쓰는 편지",
+    "아직 일어나지 않은 일을 상상하는 노래", "작은 사물 하나에 마음을 빗대는 노래", "같은 장소를 두 번 지나며 달라진 마음",
+    "누군가와 주고받은 짧은 대화로 시작하는 노래",
+]
+
+
+def variety(seed: int, avoid: list[str] | None = None, talk: str = "") -> str:
+    """작사 프롬프트에 붙일 '이번 곡' 카드: 시점·소재 예(대화 노래는 소재를 대화에서 가져오므로 시점만) · 피할 제목·훅."""
+    r = random.Random(seed)
+    out = f"이번 곡의 시점: {r.choice(ANGLES)}.\n"
+    if not talk:
+        out += f"이번 곡의 소재 예(주제에 맞으면 쓰고, 안 맞으면 비슷한 다른 것): {', '.join(r.sample(DETAIL_POOL, 5))}.\n"
+    if avoid:
+        out += f"이 곡의 이전 버전과 겹치지 않게 — 아래 제목·훅·첫 줄과 다른 말로 새로 써: {' / '.join(avoid[:9])}.\n"
+    return out
+
+
 def _craft(talk: str, rap: bool = False) -> str:
     base = RAP_CRAFT if rap else (LYRIC_CRAFT_TALK if talk else LYRIC_CRAFT)
     return base
@@ -399,11 +453,11 @@ def _mood_lines(theme: str, mood: dict | None) -> str:
             + (f"장르·악기는 이미 정했다({genre}). style 에는 장르·악기를 다시 쓰지 말고 분위기·질감 태그만.\n" if genre else ""))
 
 
-def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False) -> str:
+def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False, card: str = "") -> str:
     hook_len = (targets.get("chorus") or [6])[0]
     parts = ", ".join(f'"{k}": 이 구간에서 일어나는 장면·감정 한 문장' for k in targets)
     return (
-        f"주제: {theme}\n" + talk + _mood_lines(theme, mood) +
+        f"주제: {theme}\n" + talk + _mood_lines(theme, mood) + card +
         "이 주제로 차 안에서 듣는 한국어 노래를 기획한다. 가사를 쓰기 전에 이야기를 먼저 짠다. JSON 으로만 답해.\n"
         f'{{"title": 짧은 한국어 제목, "speaker": 노래하는 사람과 상황 한 문장, "story": {{{parts}}}, '
         f'"hook": 후렴 첫 줄이 될 훅(한글 {hook_len}글자 안팎, 완결된 말), '
@@ -415,12 +469,12 @@ def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str
     )
 
 
-def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False) -> str:
+def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False, card: str = "") -> str:
     spec = "\n".join(f'- "{k}": {len(v)}줄, 줄마다 한글 글자 수 대략 {v}(2 적게 ~ 3 많게까지 괜찮음. 글자 수보다 말이 자연스러운 게 먼저 — 멜로디를 가사에 맞춘다). 장면: {story.get("story", {}).get(k, "")}'
                      for k, v in targets.items())
     keys = ", ".join(f'"{k}": [줄, ...]' for k in targets)
     return (
-        f"주제: {theme}\n" + talk + f"노래하는 사람: {story.get('speaker', '')}\n훅(후렴 첫 줄): {story.get('hook', '')}\n"
+        f"주제: {theme}\n" + talk + card + f"노래하는 사람: {story.get('speaker', '')}\n훅(후렴 첫 줄): {story.get('hook', '')}\n"
         + (f"멜로디 느낌: {mood['label']} — 가사 말투: {TONES[mood['level']]}\n" if mood else "") +
         f"쓸 수 있는 낱말: {', '.join(map(str, story.get('images') or []))}\n"
         f"이 기획대로 가사를 쓴다. JSON 으로만 답해: {{{keys}}}\n"
@@ -511,16 +565,18 @@ def _judge_prompt(theme: str, drafts: list, talk: str = "") -> str:
     )
 
 
-async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, talk: str = "", rap: bool = False) -> dict:
+async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, talk: str = "", rap: bool = False,
+                avoid: list[str] | None = None) -> dict:
     """작사 v2. talk: 대화로 만들 때 기획·초안에 넣을 대화 카드(talk.talk_lines). 반환: {"title", "style", "cover", "sections", "miss", "hook", "judge"}. 약 40~60초(옛 방식 약 20초)."""
     lines = _targets(plan)
     targets, groups = _pair(lines)   # 아래는 모두 문장 단위로 쓰고, 끝에 줄로 나눈다
+    card = variety(seed, avoid, talk)
     async with aiohttp.ClientSession() as session:
         try:
-            story = await _ask(session, _story_prompt(theme, targets, mood, talk, rap), seed, keep="2m", temperature=0.9)
+            story = await _ask(session, _story_prompt(theme, targets, mood, talk, rap, card), seed, keep="2m", temperature=0.9)
             drafts = []
             for i in range(2):
-                out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk, rap), seed + 1 + i, keep="2m")
+                out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk, rap, card), seed + 1 + i, keep="2m")
                 drafts.append({k: [_line(l) for l in (out.get(k) or [])][:len(v)] for k, v in targets.items()})
             judge = await _ask(session, _judge_prompt(theme, drafts, talk), seed + 5, keep="2m", temperature=0.2)
             best = judge.get("best") if isinstance(judge.get("best"), int) and 0 <= judge.get("best") < len(drafts) else \

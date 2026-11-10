@@ -382,6 +382,7 @@ class MainActivity : Activity() {
         // 같은 화면을 다시 그릴 때(상태 갱신·목록 새로 받기·주행 전환·장치 연결 등)는 스크롤 위치를 지킨다 — 2026-11-08 버그:
         // 스크롤을 내려 두면 갱신될 때마다 맨 위로 튀었다. 화면 종류는 again 의 클래스로 본다(같은 자리의 람다·함수 참조는 같은 클래스)
         val keepY = if (current.javaClass == again.javaClass) scroller?.scrollY ?: 0 else 0
+        if (current.javaClass != again.javaClass) deleteArmed = null  // 지우기 확인은 다른 화면으로 가면 풀린다
         current = again
         halo = null
         glow = null
@@ -604,13 +605,13 @@ class MainActivity : Activity() {
         }, ::showSettings, tabs = true)
     }
 
-    /** 녹음한 소리가 어디로 가서 무엇에 쓰이는지 — 첫 녹음 안내와 설정에서 같은 문장. 사실만(곡 지우기는 아직 없다). */
+    /** 녹음한 소리가 어디로 가서 무엇에 쓰이는지 — 첫 녹음 안내와 설정에서 같은 문장. 사실만. */
     private fun voiceFacts(music: Boolean) = column().apply {
         background = round(SURFACE, 24)
         setPadding(dp(32), dp(24), dp(32), dp(28))
         listOf(
             "보내는 곳" to "녹음한 ${if (music) "음악" else "흥얼거림"}은 노래를 만드는 차작 서버로 보내 음표로 바꿔요.",
-            "남는 것" to "만든 곡과 녹음은 '내 노래'·'내 멜로디'에 남아 다시 듣고 이어서 만들 수 있어요.",
+            "남는 것" to "만든 곡과 녹음은 '내 노래'·'내 멜로디'에 남아 다시 듣고 이어서 만들 수 있어요. 필요 없으면 언제든 지울 수 있어요(서버에서도 지워져요).",
             "쓰지 않는 곳" to "AI 학습에 쓰지 않고, 다른 사람에게 공유하지 않아요.",
         ).forEachIndexed { i, (k, v) ->
             addView(text(k, BODY_STRONG, TEXT).withMargin(top = if (i == 0) 0 else 16))
@@ -1230,6 +1231,16 @@ class MainActivity : Activity() {
             }.withMargin(top = 24))
             if (showMore) right.addView(morePanel(idle, count))
             right.addView(button("새로 흥얼거리기", size = Size.MEDIUM, enabled = idle) { stopPlayback(); song = null; stackMode = null; showHome() }.withMargin(top = 16))
+            if (s != null) {
+                val key = "song:" + s.optString("id")
+                val made = s.optJSONArray("finals")?.length() ?: (if (s.optJSONObject("final") != null) 1 else 0)
+                right.addView(button(if (deleteArmed == key) "한 번 더 누르면 지워요" else "이 멜로디 지우기", size = Size.MEDIUM, enabled = idle && !driving) {
+                    if (deleteArmed != key) { deleteArmed = key; refresh(); return@button }
+                    deleteArmed = null; deleteSong(s.optString("id"))
+                }.withMargin(top = 16))
+                if (deleteArmed == key) right.addView(caption(
+                    (if (made > 0) "이 멜로디로 만든 노래 ${made}개도 함께 지워져요. " else "") + "지운 뒤에는 되돌릴 수 없어요.", RECORDING).withMargin(top = 8))
+            }
 
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1243,8 +1254,8 @@ class MainActivity : Activity() {
                 listOf(when {
                     s == null || !idle -> recordButton(Rec.BUSY, if (p != null) "음표로 바꾸는 중" else "노래 만드는 중", onClick = null)
                     done -> button("완성된 노래 →", Btn.SECONDARY) { showPlayer(false) }
-                    // 버튼 한 번: 오늘 드라이브 주제·자동 목소리로 바로 만든다(주행 중에도 됨). 바꾸고 싶으면 오른쪽 작은 버튼
-                    else -> button("오늘 드라이브로 노래 만들기", Btn.SECONDARY) { quickCreate() }
+                    // 버튼 한 번: 주제는 서버가 아무거나·자동 목소리로 바로 만든다(주행 중에도 됨). 바꾸고 싶으면 오른쪽 작은 버튼
+                    else -> button("바로 노래 만들기", Btn.SECONDARY) { quickCreate() }
                 }),
                 if (s != null && idle) button(if (done) "새 버전 만들기" else "주제·목소리 정하기", size = Size.MEDIUM) { showCreate() } else null)
         }
@@ -1259,10 +1270,10 @@ class MainActivity : Activity() {
 
     private var showMore = false
 
-    /** 내 멜로디에서 바로 노래 만들기: 이 곡 주제를 아직 안 정했으면 오늘 드라이브로 채우고 곧장 만든다. */
+    /** 내 멜로디에서 바로 노래 만들기: 이 곡 주제를 아직 안 정했으면 비워 둔 채(서버가 아무 주제나 고른다) 곧장 만든다. */
     private fun quickCreate() {
         val s = song ?: return
-        if (promptFor != s.optString("id")) { prompt = DriveTheme.now(); themeFromDrive = true; promptFor = s.optString("id") }
+        if (promptFor != s.optString("id")) { prompt = ""; themeFromDrive = false; promptFor = s.optString("id") }
         createFinal()
     }
 
@@ -1322,7 +1333,8 @@ class MainActivity : Activity() {
         val job = finalJob?.takeIf { it.optString("song_id") == s.optString("id") }
         val making = job != null || finalSubmitting
         // 다른 곡의 노래 만들기를 처음 열면 주제를 오늘 드라이브로 채운다(남아 있던 지난 주제 대신). 같은 곡에서 고친 주제는 그대로
-        if (!making && promptFor != s.optString("id")) { prompt = DriveTheme.now(); themeFromDrive = true; promptFor = s.optString("id") }
+        // 주제는 미리 채우지 않는다(2026-11-11 사용자: 요일·시간으로 채우니 곡이 다 비슷하다) — 비우면 서버가 아무 주제나, 아래 예시를 눌러도 된다
+        if (!making && promptFor != s.optString("id")) { prompt = ""; themeFromDrive = false; promptFor = s.optString("id"); themeExamples = emptyList() }
         show({
             addView(steps(2, busy = making))
             addView(headline("노래 만들기"))
@@ -1336,7 +1348,8 @@ class MainActivity : Activity() {
             }
             addView(label("주제"))
             addView(promptRow(enabled = !making))
-            addView(caption(if (themeFromDrive) "오늘 드라이브로 채웠어요. 🎲 로 바꾸거나 🎤 로 말해도 돼요." else "비워 두면 🎲 처럼 아무 주제나 골라요.", TEXT3))
+            addView(caption("비워 두면 아무 주제나 골라요. 아래 예시를 누르거나 🎤 로 말해도 돼요.", TEXT3))
+            addView(themeExampleRow(enabled = !making))
             addView(talkCard(s))
             s.optJSONObject("mood")?.let { m ->
                 addView(moodLine(m.optString("label"),
@@ -1397,6 +1410,9 @@ class MainActivity : Activity() {
         val t = talkResult?.takeIf { talkFor == s.optString("id") && it.optBoolean("enough", true) } ?: return null
         return JSONObject().put("story", t.optString("story")).put("feeling", t.optString("feeling"))
             .put("phrases", t.optJSONArray("phrases") ?: org.json.JSONArray()).put("direction", t.optString("direction", "그대로"))
+            // 장면 재료·훅·나온 사람도 넘긴다(전에는 빠져서 서버가 대화 속 재료로 장면을 못 그렸다 — 2026-11-11)
+            .put("details", t.optJSONArray("details") ?: org.json.JSONArray()).put("hooks", t.optJSONArray("hooks") ?: org.json.JSONArray())
+            .put("names", t.optJSONArray("names") ?: org.json.JSONArray())
     }
 
     /** 노래 만들기 화면의 대화 칸: 붙인 대화가 있으면 요약 + 빼기, 없으면 보관함에서 고르기 · 새로 녹음. */
@@ -1477,7 +1493,7 @@ class MainActivity : Activity() {
                 background = round(SURFACE, 24, POSITIVE)
                 setPadding(dp(32), dp(24), dp(32), dp(28))
                 addView(text("녹음하기 전에 차 안의 모든 분께 알려 주세요", BODY_STRONG, TEXT))
-                addView(text("녹음 파일은 받아쓴 뒤 바로 지우고, 받아쓴 글과 정리는 이 기기에만 남아요(사람 이름은 가려요). AI 학습에 쓰지 않아요. " +
+                addView(text("녹음 파일은 받아쓴 뒤 바로 지우고, 받아쓴 글과 정리는 이 기기에만 남아요. 대화에 나온 이름은 가사에 그대로 들어갈 수 있어요. AI 학습에 쓰지 않아요. " +
                              "다른 화면을 봐도 녹음은 계속돼요(알림에 '녹음 중'). 음악을 끄면 더 잘 받아써요.", BODY, TEXT2).withMargin(top = 8))
             }.withMargin(top = 24, fill = true))
             addView(label("어떤 노래로 만들까요?"))
@@ -1702,6 +1718,7 @@ class MainActivity : Activity() {
                 setPadding(dp(32), dp(24), dp(32), dp(28))
                 if (!enough) addView(text("노래로 만들 이야기가 부족해요. 조금 더 이야기한 뒤 다시 녹음해 주세요.", BODY_STRONG, RECORDING).withMargin(bottom = 12))
                 listOf("노래 주제" to t.optString("theme"), "무슨 일이 있었나" to t.optString("story"), "감정" to t.optString("feeling"),
+                       "나온 사람" to (t.optJSONArray("names")?.let { a -> (0 until a.length()).joinToString(" · ") { a.optString(it) } } ?: ""),
                        "가사에 살릴 말" to (t.optJSONArray("phrases")?.let { a -> (0 until a.length()).joinToString(" · ") { "‘${a.optString(it)}’" } } ?: ""))
                     .filter { it.second.isNotBlank() }
                     .forEachIndexed { i, (k, v) ->
@@ -1714,7 +1731,7 @@ class MainActivity : Activity() {
             addView(segmented(dirs, dirs.indexOf(t.optString("direction")).coerceAtLeast(0), width = 1176) { i -> redigest(t, dirs[i]) })
             addView(button(if (showTranscript) "받아쓴 대화 접기 ▴" else "받아쓴 대화 보기 ▾", size = Size.MEDIUM) { showTranscript = !showTranscript; showTalkDetail(t) }.withMargin(top = 20))
             if (showTranscript) addView(text(t.optString("transcript").take(3000), BODY_S, TEXT2).withMargin(top = 12))
-            addView(caption("사람 이름은 가렸어요. 녹음 파일은 지웠고, 이 내용은 이 기기에만 있어요.", TEXT3).withMargin(top = 12))
+            addView(caption("녹음 파일은 지웠고, 이 내용은 이 기기에만 있어요.", TEXT3).withMargin(top = 12))
             addView(button(if (talkDeleteArmed == t.optString("id")) "한 번 더 누르면 지워요" else "이 대화 지우기", size = Size.MEDIUM, enabled = !driving) {
                 if (talkDeleteArmed != t.optString("id")) { talkDeleteArmed = t.optString("id"); showTalkDetail(t); return@button }
                 talkDeleteArmed = null
@@ -2069,6 +2086,29 @@ class MainActivity : Activity() {
             addView(button("그만", size = Size.MEDIUM) { recognizer?.cancel(); recognizer?.destroy(); recognizer = null
                 listening = false; releaseFocus(); voiceOrb = null; refresh() }.withMargin(top = 20))
         }, FrameLayout.LayoutParams(dp(VOICE_PANEL_W), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+    }
+
+    /** 주제 예시(누르면 주제 칸에 넣는다). 서버가 장면 × 분위기로 섞어 주고, 안 되면 앱 목록에서. */
+    private var themeExamples: List<String> = emptyList()
+
+    private fun themeExampleRow(enabled: Boolean): View {
+        if (themeExamples.isEmpty()) {
+            themeExamples = THEMES.shuffled().take(3)
+            io.execute {
+                val ex = try { api.themes().optJSONArray("examples")?.let { a -> (0 until a.length()).map { a.getString(it) } } } catch (e: Exception) { null }
+                if (!ex.isNullOrEmpty()) ui.post { themeExamples = ex.take(3); refresh() }
+            }
+        }
+        return android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            themeExamples.forEach { ex ->
+                addView(button(ex, Btn.PRIMARY, Size.MEDIUM, enabled = enabled && !driving) {
+                    prompt = ex; themeFromDrive = false; promptInput?.setText(ex); saveDraft()
+                }.withMargin(end = 12))
+            }
+        })
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+        }
     }
 
     /** 주사위: 서버 주제 목록에서 아무거나(지금과 다른 것). 서버가 안 되면 앱에 있는 목록. */
@@ -2675,6 +2715,16 @@ class MainActivity : Activity() {
                             stopPlayback(); playerVersion = v.optString("id"); lyricsDraft = null; showPlayer(false)
                         }.apply { maxLines = 1; gravity = Gravity.CENTER_VERTICAL or Gravity.START }.withMargin(bottom = 12, fill = true))
                     }
+                }
+                run {
+                    val key = "final:" + f.optString("id")
+                    left.addView(button(if (deleteArmed == key) "한 번 더 누르면 지워요" else if (finals.size > 1) "이 버전 지우기" else "이 노래 지우기",
+                        size = Size.MEDIUM, enabled = !driving && !finalSubmitting) {
+                        if (deleteArmed != key) { deleteArmed = key; showPlayer(false); return@button }
+                        deleteArmed = null; deleteFinal(s.optString("id"), f.optString("id"))
+                    }.withMargin(top = 12, fill = true))
+                    if (deleteArmed == key) left.addView(caption(if (finals.size > 1) "이 버전의 노래와 표지만 지워요. 멜로디와 다른 버전은 남아요."
+                                                                else "노래와 표지를 지워요. 멜로디는 남아서 다시 만들 수 있어요.", RECORDING).withMargin(top = 8))
                 }
                 // 가사는 줄이 짧아 표지 아래 좁은 칸에, 넓은 오른쪽 칸은 듣기·다시 만들기에 쓴다(가사가 길어도 다시 만들기가 밀려나지 않게)
                 left.addView(label(if (driving) "지금 부르는 줄" else "가사"))
@@ -3876,6 +3926,47 @@ class MainActivity : Activity() {
         pendingToken++
     }
 
+    /** 지우기 확인 대기(두 번 눌러 지운다): "song:<id>" · "final:<id>". 다른 화면으로 가면 풀린다. */
+    private var deleteArmed: String? = null
+
+    private fun deleteSong(id: String) {
+        stopPlayback()
+        io.execute {
+            try {
+                api.deleteSong(id)
+                ui.post {
+                    if (song?.optString("id") == id) song = null
+                    library = library.filter { it.optString("id") != id }
+                    notice = "멜로디와 그 노래를 지웠어요."
+                    loadLibrary(); showMelodyList()
+                }
+            } catch (e: ApiException) {
+                ui.post { showError(e.message ?: "지우지 못했어요.") }
+            } catch (e: Exception) {
+                Log.e(tag, "지우기 실패", e)
+                ui.post { showError("서버와 연결이 끊겨 지우지 못했어요(${api.base}). 잠시 후 다시 시도해 주세요.", settingsHelp = true) }
+            }
+        }
+    }
+
+    private fun deleteFinal(songId: String, finalId: String) {
+        stopPlayback()
+        io.execute {
+            try {
+                val next = api.deleteFinal(songId, finalId)
+                ui.post {
+                    song = next; playerVersion = null; lyricsDraft = null; loadLibrary()
+                    if (next.optJSONObject("final") != null) showPlayer(false) else { notice = "노래를 지웠어요. 멜로디는 남아 있어요."; showSong(false) }
+                }
+            } catch (e: ApiException) {
+                ui.post { showError(e.message ?: "지우지 못했어요.") }
+            } catch (e: Exception) {
+                Log.e(tag, "지우기 실패", e)
+                ui.post { showError("서버와 연결이 끊겨 지우지 못했어요(${api.base}). 잠시 후 다시 시도해 주세요.", settingsHelp = true) }
+            }
+        }
+    }
+
     /** 서버 호출 → 곡 갱신 → 곡 화면(새 결과는 바로 1회 재생). */
     private fun call(autoplay: Boolean = true, request: () -> JSONObject) {
         io.execute {
@@ -4414,7 +4505,8 @@ class MainActivity : Activity() {
         /** 5초도 안 돼 조용해졌을 때 — 3초 미만은 노래로 만들 수 없다. */
         const val QUIET_TOO_SHORT = "조금 더 흥얼거려 주세요. 5초 넘게 불러야 노래로 만들 수 있어요."
         const val REQ_EXPORT_RECORDING = 5
-        const val DEFAULT_INPUT = "기본 마이크(차가 고름)"
+        /** 녹음 장치를 따로 고르지 않음 → 안드로이드 기본 마이크(AudioSource.MIC). 어느 마이크로 들어올지는 차량 오디오 설정이 정한다. */
+        const val DEFAULT_INPUT = "자동(차량 기본 마이크)"
         val STEPS = listOf("흥얼거리기", "내 멜로디", "노래 만들기", "완성")
         const val INPUT_MENU_W = 560
         const val FOCUS_DENIED = "지금은 녹음할 수 없어요. 통화나 안내가 끝난 뒤 다시 흥얼거려 주세요."

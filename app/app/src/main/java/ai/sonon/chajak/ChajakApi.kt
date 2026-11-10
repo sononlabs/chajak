@@ -23,6 +23,12 @@ class ChajakApi(val base: String) {
 
     fun deleteTrack(songId: String, n: Int): JSONObject = request("DELETE", "/v1/songs/$songId/tracks/$n", null)
 
+    /** 곡 지우기: 멜로디·트랙·노래 모든 버전·표지(서버와 생성 엔진에 남은 사본까지). */
+    fun deleteSong(songId: String): JSONObject = request("DELETE", "/v1/songs/$songId", null)
+
+    /** 노래 한 버전 지우기 → 남은 곡 정보. */
+    fun deleteFinal(songId: String, finalId: String): JSONObject = request("DELETE", "/v1/songs/$songId/finals/$finalId", null)
+
     fun variations(): JSONObject = request("GET", "/v1/variations", null)
 
     fun instruments(): JSONObject = request("GET", "/v1/instruments", null)

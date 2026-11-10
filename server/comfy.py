@@ -179,9 +179,13 @@ def text(outputs: dict, node: str) -> str:
     return t[0] if t else ""
 
 
-def melody_graph(upload_name: str, melody: str, music: bool = False) -> dict:
-    """악보만 뽑는 그래프. 같은 입력으로 track_graph 를 이어 돌리면 ComfyUI 캐시로 앞부분은 다시 계산하지 않는다."""
-    return _melody_front(upload_name, MELODY_FREEDOM[melody], music)
+def melody_graph(upload_name: str, melody: str, music: bool = False, prep_prefix: str | None = None) -> dict:
+    """악보만 뽑는 그래프. 같은 입력으로 track_graph 를 이어 돌리면 ComfyUI 캐시로 앞부분은 다시 계산하지 않는다.
+    prep_prefix 를 주면 허밍 정리 뒤 소리도 저장한다(세밀 악보용, fine_melody)."""
+    p = _melody_front(upload_name, MELODY_FREEDOM[melody], music)
+    if prep_prefix:
+        p["prep_save"] = {"class_type": "SaveAudioAdvanced", "inputs": {"audio": ["prep", 0], "filename_prefix": prep_prefix, "format": "flac"}}
+    return p
 
 
 def fit_tempo(song_tempo: float, hummed_tempo: float) -> int:

@@ -12,6 +12,8 @@ import asyncio
 import io
 import json
 import re
+import shutil
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +24,7 @@ import soundfile as sf
 from aiohttp import web
 
 import comfy as C
+import fine_melody
 import lyrics
 import melody_ai
 import melody_mood
@@ -130,7 +133,9 @@ def _track_view(song: dict, t: dict, base: str) -> dict:
     score = melody_notes.notes(t)
     # 음표 → 성격. 계산이 가벼워서 저장하지 않고 응답 때마다 잰다(규칙을 고치면 지난 곡에도 바로 반영)
     mood = melody_mood.analyze(score, t["tempo"], t.get("hum_info"), t.get("key"), t.get("transpose", 0), t.get("input", "hum"))
-    return {**{k: v for k, v in t.items() if k not in ("file", "abc")}, "audio_url": f"{base}/tracks/{t['n']}/audio",
+    if t.get("abc_fine"):  # 화면 악보는 세밀 악보(연주도 이것), 성격 분석은 노래 만들기와 같은 SheetSage2 악보로
+        score = melody_notes.notes({**t, "abc": t["abc_fine"]})
+    return {**{k: v for k, v in t.items() if k not in ("file", "abc", "abc_fine")}, "audio_url": f"{base}/tracks/{t['n']}/audio",
             "hum_url": f"{base}/tracks/{t['n']}/hum" if any((STORAGE / song["id"]).glob(f"hum{t['n']}.*")) else None,
             "score": score, "mood": _mood_view(mood),
             "duration_sec": round(sf.info(STORAGE / song["id"] / t["file"]).duration, 2)}
@@ -211,14 +216,29 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
             hummed_tempo, hummed_key = C.abc_header(C.text(await cf.run(C.melody_graph(name, melody, music), front=True), "abc_out"))
             tempo = C.fit_tempo(song["tempo"], hummed_tempo)
             transpose = C.fit_key(song["key"], hummed_key)
-        outputs = await cf.run(C.track_graph(name, instrument, melody, accompaniment, tempo,
-                                             f"chajak_server/{song_id}_{n}", transpose, music), front=True)
+        fine, fine_info = None, None
+        if melody == "그대로" and not music:
+            # 세밀 악보(2026-11-11 사용자: 음표가 너무 단순하다): 정리한 허밍을 pYIN 으로 32분음표 칸까지 —
+            # 화면·연주에만 쓰고, 노래 만들기는 아래 SheetSage2 악보(track["abc"])를 그대로 쓴다
+            front = await cf.run(C.melody_graph(name, melody, music, prep_prefix=f"chajak_server/{song_id}_{n}_prep"), front=True)
+            coarse = C.text(front, "abc_out")
+            try:
+                prep = await cf.fetch_audio(front, "prep_save")
+                fine, fine_info = await asyncio.get_running_loop().run_in_executor(None, fine_melody.fine_abc, prep, coarse)
+            except Exception as e:  # 세밀 악보가 안 되면 예전처럼
+                print("세밀 악보 실패(SheetSage2 악보로 연주):", e, flush=True)
+        if fine:
+            outputs = await cf.run(C.abc_graph(fine, instrument, accompaniment, tempo, transpose, f"chajak_server/{song_id}_{n}"), front=True)
+            outputs = {**front, **outputs}  # abc_out(SheetSage2)·prep_info 는 앞 그래프에서
+        else:
+            outputs = await cf.run(C.track_graph(name, instrument, melody, accompaniment, tempo,
+                                                 f"chajak_server/{song_id}_{n}", transpose, music), front=True)
     except C.ComfyError as e:
         if e.kind in HUM_ERRORS:
             raise ApiError(422, *HUM_ERRORS[e.kind]) from e
         raise ApiError(502, "ENGINE_ERROR", f"생성 엔진 오류: {e}") from e
     audio = await cf.fetch_audio(outputs, "save")
-    abc = C.text(outputs, "abc_out")
+    abc = C.text(front if fine else outputs, "abc_out")
     info = C.text(outputs, "render_info")
     track_tempo, key = C.abc_header(abc)
     track = {
@@ -229,6 +249,8 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
         "hum_info": C.text(outputs, "prep_info"), "render_info": info,
         "seconds": round(time.perf_counter() - t0, 2), "abc": abc, "file": f"track{n}.flac",
     }
+    if fine:
+        track.update(abc_fine=fine, fine_info=fine_info)
     return track, audio
 
 
@@ -369,6 +391,81 @@ async def delete_track(request):
         d = store.dir(song["id"])
         (d / song["tracks"].pop()["file"]).unlink(missing_ok=True)
         song["duration_sec"] = mix_song(d, song["tracks"])
+        store.save(song)
+        return web.json_response(song_view(song))
+
+
+# ComfyUI 폴더: 서버를 ComfyUI venv 의 python 으로 켜므로(README) 그 위 폴더. 다르면 CHAJAK_COMFY_DIR.
+def _comfy_dir() -> Path | None:
+    import os
+    env = os.environ.get("CHAJAK_COMFY_DIR")
+    for d in ([Path(env)] if env else []) + [Path(sys.executable).resolve().parents[2]]:
+        if (d / "main.py").exists():
+            return d
+    return None
+
+
+def _busy(app, song_id: str, final_id: str | None = None) -> bool:
+    """이 곡(또는 이 버전을 바탕으로)으로 노래를 만드는 중인가."""
+    return any(j.get("song_id") == song_id and j.get("status") not in ("done", "failed", "error")
+               and (final_id is None or j.get("from") == final_id) for j in app["jobs"].values())
+
+
+def _purge_comfy(song_id: str) -> int:
+    """ComfyUI 입력(올린 허밍)·출력(연주·노래·표지) 폴더에 남은 이 곡의 사본을 지운다."""
+    d, n = _comfy_dir(), 0
+    if d is None:
+        return 0
+    for sub in ("input/chajak_server", "output/chajak_server"):
+        for f in (d / sub).glob(f"{song_id}_*"):
+            try:
+                f.unlink(); n += 1
+            except OSError:
+                pass
+    return n
+
+
+async def delete_song(request):
+    """곡 지우기: 멜로디(트랙)·노래 모든 버전·표지와 ComfyUI 에 남은 사본까지. 노래를 만드는 중이면 409."""
+    store: Store = request.app["store"]
+    song_id = request.match_info["song_id"]
+    d = store.dir(song_id)
+    if _busy(request.app, song_id):
+        raise ApiError(409, "BUSY", "이 곡으로 노래를 만드는 중이에요. 다 만든 뒤에 지워 주세요.")
+    async with store.lock(song_id):
+        shutil.rmtree(d, ignore_errors=True)
+    store._locks.pop(song_id, None)
+    copies = _purge_comfy(song_id)
+    for jid in [k for k, j in request.app["jobs"].items() if j.get("song_id") == song_id]:  # 작업 기록에 남은 가사·주제도
+        request.app["jobs"].pop(jid, None)
+    _save_jobs(request.app["jobs"])
+    return web.json_response({"deleted": song_id, "comfy_copies": copies})
+
+
+async def delete_final(request):
+    """노래 한 버전 지우기(멜로디와 다른 버전은 남는다). 다른 버전과 같이 쓰는 표지는 남긴다."""
+    store: Store = request.app["store"]
+    song_id, fid = request.match_info["song_id"], request.match_info["final_id"]
+    store.dir(song_id)
+    if _busy(request.app, song_id, fid):
+        raise ApiError(409, "BUSY", "이 버전으로 새 노래를 만드는 중이에요. 다 만든 뒤에 지워 주세요.")
+    async with store.lock(song_id):
+        song = store.load(song_id)
+        finals = song.get("finals") or ([song["final"]] if song.get("final") else [])
+        f = next((x for x in finals if x.get("id") == fid), None)
+        if f is None:
+            raise ApiError(404, "NOT_FOUND", "그 노래 버전을 찾을 수 없어요.")
+        rest = [x for x in finals if x is not f]
+        d = store.dir(song_id)
+        (d / f.get("file", "final.flac")).unlink(missing_ok=True)
+        cover = f.get("cover")
+        if cover and all(x.get("cover") != cover for x in rest):
+            (d / cover).unlink(missing_ok=True)
+        song["finals"] = rest
+        if rest:
+            song["final"] = rest[-1]
+        else:
+            song.pop("final", None); song.pop("finals", None)
         store.save(song)
         return web.json_response(song_view(song))
 
@@ -518,7 +615,7 @@ async def _run_ai(app, job: dict, song: dict, lyrics: str):
 
 
 async def themes(request):
-    return web.json_response({"themes": lyrics.THEMES, "random": lyrics.random_theme()})
+    return web.json_response({"themes": lyrics.THEMES, "random": lyrics.random_theme(), "examples": lyrics.theme_examples()})
 
 
 FINAL_SECONDS = 120.0
@@ -607,6 +704,17 @@ async def start_final(request):
     request.app["jobs"][job_id] = job
     request.app["ai_tasks"].add(asyncio.create_task(_run_final(request.app, job, song)))
     return web.json_response({k: v for k, v in job.items() if k != "_remix"}, status=202)
+
+
+def _avoid(song: dict) -> list[str]:
+    """이 곡의 최근 버전 3개의 제목·후렴 첫 줄·첫 줄 — 다시 만들 때 같은 가사가 또 나오지 않게(2026-11-11)."""
+    out = []
+    for f in (song.get("finals") or [])[-3:]:
+        ly = f.get("lyrics") or {}
+        first = next((v[0] for v in ly.values() if v), "")
+        hook = (ly.get("chorus") or [""])[0]
+        out += [x for x in (f.get("title"), hook, first) if x]
+    return list(dict.fromkeys(out))
 
 
 def _melody_mood(src_abc: str, first: dict) -> dict | None:
@@ -704,7 +812,7 @@ async def _run_final_now(app, job: dict, song: dict):
         elif remix["keep_lyrics"] and same_form:
             words = {"title": base["title"], "style": base["style"], "cover": base.get("scene", ""), "sections": base["lyrics"], "miss": base.get("syllable_miss")}
         else:
-            words = await lyrics.write(job["prompt"], lyr_plan, seed, mood, T.talk_lines(opts.get("talk")), rap=rap)
+            words = await lyrics.write(job["prompt"], lyr_plan, seed, mood, T.talk_lines(opts.get("talk")), rap=rap, avoid=_avoid(song))
             # 새로 쓴 가사일 때만 스타일·표지를 멜로디 느낌에 맞춘다(가사·스타일을 지킨 다시 만들기는 그대로)
             words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
             words["cover"] = melody_mood.cover_scene(words["cover"], mood, job["prompt"])
@@ -830,8 +938,7 @@ async def _run_talk(app, tid: str, data: bytes, direction: str):
             story = await T.digest(heard["text"], direction, lines=heard["lines"])
         except T.DigestError as e:
             raise ApiError(502, "TALK_DIGEST_FAILED", f"{e} 잠시 후 다시 시도해 주세요.")
-        names = story.pop("_names", [])
-        lines = [T._mask(l, names) for l in heard["lines"]]  # 앱에 보관될 받아쓴 글도 이름을 가린다
+        lines = heard["lines"]
         job["result"] = {"transcript": " ".join(lines), "lines": lines, "seconds": heard["seconds"], **story,
                          "timing": {"stt_sec": round(t1 - t0, 1), "digest_sec": round(time.perf_counter() - t1, 1), "stt_device": heard["device"]}}
         job.update(status="done", stage="done")
@@ -861,7 +968,6 @@ async def talk_digest(request):
         story = await T.digest(" ".join(lines), direction, lines=lines)
     except T.DigestError as e:
         raise ApiError(502, "TALK_DIGEST_FAILED", f"{e} 잠시 후 다시 시도해 주세요.")
-    story.pop("_names", None)
     return _json_ok(story)
 
 
@@ -889,7 +995,7 @@ async def write_lyrics(request):
         plan = lyrics.rap_plan(plan["seconds"])
     mood = _melody_mood(src, first) if body.get("follow_mood", True) is not False and not rap else None
     talk = T.sanitize(body.get("talk")) if body.get("talk") else None
-    words = await lyrics.write(prompt, plan, int(uuid.uuid4().int % 2**31), mood, T.talk_lines(talk), rap=rap)
+    words = await lyrics.write(prompt, plan, int(uuid.uuid4().int % 2**31), mood, T.talk_lines(talk), rap=rap, avoid=_avoid(song))
     if rap:
         words["style"], words["sections"] = lyrics.RAP_STYLE, lyrics.rap_clean(words["sections"])
     else:
@@ -1047,6 +1153,8 @@ def make_app(comfy_url: str) -> web.Application:
         web.post("/v1/songs/{song_id}/tracks", add_track),
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/audio", track_audio),
         web.delete("/v1/songs/{song_id}/tracks/{n:\\d+}", delete_track),
+        web.delete("/v1/songs/{song_id}", delete_song),
+        web.delete("/v1/songs/{song_id}/finals/{final_id}", delete_final),
         web.get("/v1/variations", variations),
         web.post("/v1/songs/{song_id}/variations", add_variation),
         web.post("/v1/songs/{song_id}/ai", start_ai),
