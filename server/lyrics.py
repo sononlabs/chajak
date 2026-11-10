@@ -327,8 +327,60 @@ LYRIC_CRAFT_TALK = (
 )
 
 
-def _craft(talk: str) -> str:
-    return LYRIC_CRAFT_TALK if talk else LYRIC_CRAFT
+# 랩(2026-11-10 시험: 악보 없이 만들면 초당 5.4자로 랩 속도가 나왔다) — 촘촘한 줄, 줄 끝 각운, 펀치라인, 짧게 반복하는 훅
+RAP_CRAFT = (
+    "이건 노래가 아니라 한국어 랩이다. 잘 쓴 랩 가사의 조건:\n"
+    "- 벌스는 줄마다 말을 촘촘하게(한글 13~17자), 말하듯 빠른 리듬. 조사를 살린 자연스러운 문장으로.\n"
+    "- 줄 끝 각운: 두 줄씩 끝소리를 맞춘다(예: '~했어/~받았어', '~요청/~소리쳐' 처럼 모음·받침이 닮게).\n"
+    "- 펀치라인: 벌스마다 한 줄은 재치 있게 받아치는 한 방.\n"
+    "- 훅(후렴)은 짧고(10자 안팎) 되풀이하기 쉽게, 두 번 불러도 질리지 않게.\n"
+    "- 2벌스는 1벌스에서 한 걸음 더 나아간다(같은 말 되풀이 금지).\n"
+    f"- 흔한 말은 피한다: {CLICHES}. 욕설·비하 금지(감정의 세기는 살린다).\n"
+    "- 문장부호·영어·숫자 금지. 기존 노래 가사를 베끼지 않는다. 사람 이름·회사 같은 고유한 정보는 쓰지 않는다."
+)
+RAP_STYLE = "korean hip hop, rap, boom bap beat, punchy drums, deep bass, fast rap flow, confident delivery"
+
+
+def rap_plan(seconds: float) -> dict:
+    """랩 곡 계획: 벌스 → 훅 → 벌스 2 → 훅. 1분 기준 약 320자(초당 5.4자) — 노래 계획처럼 줄이 적으면 30초에서 끝났다."""
+    n = 8 if seconds <= 75 else 12 if seconds <= 135 else 16
+    return {"seconds": seconds, "sections": [
+        {"name": "verse", "sung": True, "syllables": [15] * n},
+        {"name": "chorus", "sung": True, "syllables": [10] * 4},
+        {"name": "verse2", "sung": True, "syllables": [15] * n},
+    ]}
+
+
+def rap_clean(sections: dict, longest: int = 19) -> dict:
+    """랩 가사 정리(2026-11-10 시험: 규칙을 줘도 쉼표·따옴표·느낌표가 섞이고 21자 줄이 나왔다).
+    한글과 띄어쓰기만 남기고, 너무 긴 줄은 가운데에 가까운 띄어쓰기에서 두 줄로 나눈다."""
+    out = {}
+    for name, lines in (sections or {}).items():
+        res = []
+        for line in lines or []:
+            t = re.sub(r"\s+", " ", re.sub(r"[^가-힣\s]", " ", str(line))).strip()
+            if not t:
+                continue
+            if _syllables(t) > longest and " " in t:
+                half = len(t) / 2
+                cut = min((i for i, c in enumerate(t) if c == " "), key=lambda i: abs(i - half))
+                res += [t[:cut].strip(), t[cut:].strip()]
+            else:
+                res.append(t)
+        out[name] = res
+    return out
+
+
+def rap_text(sections: dict) -> str:
+    """YuE2 가사: 벌스 · 훅 · 벌스 2 · 훅."""
+    v1, hook, v2 = sections.get("verse") or [], sections.get("chorus") or [], sections.get("verse2") or sections.get("verse") or []
+    blocks = [("verse", v1), ("chorus", hook), ("verse", v2), ("chorus", hook)]
+    return "\n\n".join(f"[{k}]\n" + "\n".join(v) for k, v in blocks if v)
+
+
+def _craft(talk: str, rap: bool = False) -> str:
+    base = RAP_CRAFT if rap else (LYRIC_CRAFT_TALK if talk else LYRIC_CRAFT)
+    return base
 
 
 # 멜로디 성격(에너지 칸) → 가사 말투
@@ -346,7 +398,7 @@ def _mood_lines(theme: str, mood: dict | None) -> str:
             + (f"장르·악기는 이미 정했다({genre}). style 에는 장르·악기를 다시 쓰지 말고 분위기·질감 태그만.\n" if genre else ""))
 
 
-def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str = "") -> str:
+def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False) -> str:
     hook_len = (targets.get("chorus") or [6])[0]
     parts = ", ".join(f'"{k}": 이 구간에서 일어나는 장면·감정 한 문장' for k in targets)
     return (
@@ -357,11 +409,12 @@ def _story_prompt(theme: str, targets: dict, mood: dict | None = None, talk: str
         + ('"images": 대화 속 재료에서 고른, 가사에 쓸 구체적인 낱말 6개(배열), ' if talk else '"images": 가사에 쓸 구체적인 소리·장면 낱말 6개(배열), ') +
         '"style": 영어 음악 스타일 태그 6~8개(장르·악기·분위기, male vocal 또는 female vocal 하나 포함)를 쉼표로, '
         '"cover": 앨범 표지 그림 설명(영어 한 문장, 장면·색·빛만. 간판·표지판·책·화면처럼 글자가 생길 만한 물건은 넣지 마)}\n'
-        "절은 장면에서 시작해 후렴에서 감정이 터지고, 2절은 한 걸음 나아가고, 브리지는 한 번 뒤집는 흐름으로.\n" + _craft(talk)
+        + ("1벌스에서 상황을 쏟아내고, 훅에서 한 줄로 터뜨리고, 2벌스에서 한 걸음 더 나아가는 흐름으로.\n" if rap else
+         "절은 장면에서 시작해 후렴에서 감정이 터지고, 2절은 한 걸음 나아가고, 브리지는 한 번 뒤집는 흐름으로.\n") + _craft(talk, rap)
     )
 
 
-def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "") -> str:
+def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = None, talk: str = "", rap: bool = False) -> str:
     spec = "\n".join(f'- "{k}": {len(v)}줄, 줄마다 한글 글자 수 대략 {v}(2 적게 ~ 3 많게까지 괜찮음. 글자 수보다 말이 자연스러운 게 먼저 — 멜로디를 가사에 맞춘다). 장면: {story.get("story", {}).get(k, "")}'
                      for k, v in targets.items())
     keys = ", ".join(f'"{k}": [줄, ...]' for k in targets)
@@ -372,7 +425,7 @@ def _draft_prompt(theme: str, story: dict, targets: dict, mood: dict | None = No
         f"이 기획대로 가사를 쓴다. JSON 으로만 답해: {{{keys}}}\n"
         f"구간별 줄 수·글자 수(띄어쓰기 빼고 센 한글 글자):\n{spec}\n"
         "글자 수가 적은 줄은 조사·어미를 살려 짧은 완결된 말로(예: 4글자 '비가 와요', '집에 가자').\n"
-        + _craft(talk)
+        + _craft(talk, rap)
     )
 
 
@@ -457,16 +510,16 @@ def _judge_prompt(theme: str, drafts: list, talk: str = "") -> str:
     )
 
 
-async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, talk: str = "") -> dict:
+async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, talk: str = "", rap: bool = False) -> dict:
     """작사 v2. talk: 대화로 만들 때 기획·초안에 넣을 대화 카드(talk.talk_lines). 반환: {"title", "style", "cover", "sections", "miss", "hook", "judge"}. 약 40~60초(옛 방식 약 20초)."""
     lines = _targets(plan)
     targets, groups = _pair(lines)   # 아래는 모두 문장 단위로 쓰고, 끝에 줄로 나눈다
     async with aiohttp.ClientSession() as session:
         try:
-            story = await _ask(session, _story_prompt(theme, targets, mood, talk), seed, keep="2m", temperature=0.9)
+            story = await _ask(session, _story_prompt(theme, targets, mood, talk, rap), seed, keep="2m", temperature=0.9)
             drafts = []
             for i in range(2):
-                out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk), seed + 1 + i, keep="2m")
+                out = await _ask(session, _draft_prompt(theme, story, targets, mood, talk, rap), seed + 1 + i, keep="2m")
                 drafts.append({k: [_line(l) for l in (out.get(k) or [])][:len(v)] for k, v in targets.items()})
             judge = await _ask(session, _judge_prompt(theme, drafts, talk), seed + 5, keep="2m", temperature=0.2)
             best = judge.get("best") if isinstance(judge.get("best"), int) and 0 <= judge.get("best") < len(drafts) else \

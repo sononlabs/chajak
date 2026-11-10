@@ -1346,7 +1346,8 @@ class MainActivity : Activity() {
             val type = voiceRange.type()
             addView(label("목소리" + (type?.let { " · 자동이면 내 음역(${it.name} 쪽)에 맞춰 ${if (it.male) "남성" else "여성"}" } ?: "")))
             val voices = VOICE_NAMES.keys.toList()
-            addView(segmented(VOICE_NAMES.values.toList(), voices.indexOf(voice), width = OPTION_W) { voice = voices[it]; saveDraft(); refresh() })
+            addView(segmented(VOICE_NAMES.values.toList(), voices.indexOf(voice), width = VOICE_W) { voice = voices[it]; saveDraft(); refresh() })
+            if (voice == "rap") addView(caption("랩: 허밍 멜로디 대신 새 힙합 비트 위에서 빠르게 랩해요. 가사도 줄 끝 각운을 맞춘 랩 가사로 써요.", TEXT3))
             addView(label("곡 길이"))
             addView(segmented(listOf("1분", "2분", "3분"), finalSeconds / 60 - 1, width = OPTION_W) { finalSeconds = (it + 1) * 60; saveDraft(); refresh() })
             addView(button(if (showOptions) "세부 설정 접기 ▴" else "세부 설정 · 멜로디 반영 $melodyWeight · 스타일 강도 $styleWeight ▾", size = Size.MEDIUM) {
@@ -2102,7 +2103,8 @@ class MainActivity : Activity() {
         addView(segmented(listOf("1분", "2분", "3분"), finalSeconds / 60 - 1, width = OPTION_W) { finalSeconds = (it + 1) * 60; saveDraft(); refresh() })
         addView(label("목소리"))
         val voices = VOICE_NAMES.keys.toList()
-        addView(segmented(VOICE_NAMES.values.toList(), voices.indexOf(voice), width = OPTION_W) { voice = voices[it]; saveDraft(); refresh() })
+        addView(segmented(VOICE_NAMES.values.toList(), voices.indexOf(voice), width = VOICE_W) { voice = voices[it]; saveDraft(); refresh() })
+            if (voice == "rap") addView(caption("랩: 허밍 멜로디 대신 새 힙합 비트 위에서 빠르게 랩해요. 가사도 줄 끝 각운을 맞춘 랩 가사로 써요.", TEXT3))
         addView(weightSlider("내 멜로디 반영", "70 이상: 내 허밍 그대로 · 33~69: 허밍은 참고만, AI가 더 좋은 멜로디로 · 33 미만: AI가 자유롭게", melodyWeight) { melodyWeight = it; saveDraft() })
         addView(weightSlider("스타일 강도", "높을수록 주제의 장르·분위기를 진하게", styleWeight) { styleWeight = it; saveDraft() })
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
@@ -2128,6 +2130,19 @@ class MainActivity : Activity() {
         addView(text(help, BODY_S, TEXT3))
     }
 
+    /**
+     * 서버에 보낼 목소리: '자동'은 내 음역(남성/여성) 쪽, '랩'은 내 음역에 맞춘 남성·여성 래퍼(2026-11-10 랩 옵션 —
+     * 서버가 허밍 악보 없이 힙합 비트·랩 가사로 만든다. 악보를 따르면 노래처럼 불렀다).
+     */
+    private fun sungVoice(): String {
+        val male = voiceRange.type()?.male
+        return when (voice) {
+            "auto" -> male?.let { if (it) "male" else "female" } ?: "auto"
+            "rap" -> if (male == false) "rap_female" else "rap_male"
+            else -> voice
+        }
+    }
+
     private fun createFinal(from: String? = null, keepLyrics: Boolean = false, lyrics: JSONObject? = null, keepCover: Boolean = false, edit: String? = null,
                             extra: JSONObject? = null) {
         val s = song ?: return
@@ -2139,7 +2154,7 @@ class MainActivity : Activity() {
         stopPlayback()
         val promptSnapshot = prompt
         // 목소리 '자동'이면 내 음역대 쪽(남성/여성)으로 — 따라 부르기 편한 노래가 되게
-        val sung = if (voice == "auto") voiceRange.type()?.let { if (it.male) "male" else "female" } ?: "auto" else voice
+        val sung = sungVoice()
         val options = JSONObject().put("seconds", finalSeconds).put("voice", sung)
             .put("melody_weight", melodyWeight).put("style_weight", styleWeight).put("follow_mood", followMood)
         if (from != null) options.put("from", from).put("keep_lyrics", keepLyrics).put("keep_cover", keepCover)
@@ -2192,7 +2207,7 @@ class MainActivity : Activity() {
                 addView(headline("가사를 쓰는 중"))
                 addView(body("주제 · 멜로디 느낌" + (if (talkPayload(s) != null) " · 대화 이야기" else "") + "로 가사를 쓰고 있어요. 약 1분. 다 쓰면 보고 고칠 수 있어요."))
             }, {}) { zones(button("← 노래 만들기") { showCreate() }, listOf(recordButton(Rec.BUSY, "가사 쓰는 중", onClick = null))) }
-            val body = JSONObject().put("prompt", prompt).put("seconds", finalSeconds).put("follow_mood", followMood)
+            val body = JSONObject().put("prompt", prompt).put("seconds", finalSeconds).put("follow_mood", followMood).put("voice", sungVoice())
             talkPayload(s)?.let { body.put("talk", it) }
             io.execute {
                 try {
@@ -4442,7 +4457,7 @@ class MainActivity : Activity() {
         val SECTION_NAMES = mapOf("verse" to "절", "chorus" to "후렴", "bridge" to "브리지")
         /** 가사 편집 칸 머리말(서버 가사 묶음 이름 ↔ 화면). */
         val LYRIC_KEYS = linkedMapOf("verse" to "절 1", "chorus" to "후렴", "verse2" to "절 2", "bridge" to "브리지")
-        val VOICE_NAMES = linkedMapOf("auto" to "자동", "female" to "여성", "male" to "남성", "none" to "연주곡")
+        val VOICE_NAMES = linkedMapOf("auto" to "자동", "female" to "여성", "male" to "남성", "rap" to "랩", "none" to "연주곡")
         /** 주사위 주제(서버에 못 닿을 때). 서버 lyrics.THEMES 와 같은 목록 일부. */
         val THEMES = listOf(
             "비 오는 밤 퇴근길, 와이퍼 소리와 잔잔한 시티팝",
@@ -4481,6 +4496,8 @@ class MainActivity : Activity() {
         const val SETTINGS_TAB_H = 128
         const val MUSIC_COVER = 240
         const val OPTION_W = 640
+        /** 목소리 고르기(자동·여성·남성·랩·연주곡) 폭. */
+        const val VOICE_W = 820
         /** 시작음 '띠링'(0.3초)이 끝나자마자 녹음을 여는 간격 — 효과음은 섞이지 않게, 첫 음은 놓치지 않게. */
         const val BEEP_GAP_MS = 350L
         /** 따라 부르기 연습 막대 그림 높이. */

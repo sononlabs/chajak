@@ -524,7 +524,9 @@ FINAL_SECONDS = 120.0
 FINAL_ETA = lambda sec: round(40 + (sec + 8) * 1.7)
 
 
-VOICES = {"auto": "", "female": "female vocal", "male": "male vocal", "none": ""}
+VOICES = {"auto": "", "female": "female vocal", "male": "male vocal", "none": "",
+          # 랩(2026-11-10): 허밍 악보 없이 만들고 힙합 태그·랩 가사로
+          "rap_male": "male rapper, rap vocal", "rap_female": "female rapper, rap vocal"}
 # 앨범 표지에 글자가 절대 들어가지 않게(앱·사용자에게는 보이지 않는 고정 지시)
 COVER_NO_TEXT = ("a wordless picture: absolutely no text, no letters, no words, no numbers, no captions, no title, "
                  "no typography, no signs, no signboards, no logo, no watermark, no writing of any language")
@@ -571,6 +573,9 @@ async def start_final(request):
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
             "style_weight": int(min(100, max(0, int(body.get("style_weight", 50))))),
             "follow_mood": body.get("follow_mood", True) is not False}
+    if opts["voice"].startswith("rap"):  # 랩은 허밍 악보를 따르게 하면 노래처럼 불렀다(초당 2.2자) — 악보 없이, 멜로디 느낌 장르도 쓰지 않는다
+        opts["melody_weight"] = min(opts["melody_weight"], 20)
+        opts["follow_mood"] = False
     if body.get("talk"):  # 대화로 가사 만들기: /v1/talk 가 정리해 준 이야기를 가사에 넣는다
         opts["talk"] = T.sanitize(body.get("talk"))
     # 다시 만들기: 이전 버전을 바탕으로 가중치·주제·가사·스타일만 바꾼다
@@ -674,11 +679,13 @@ async def _run_final_now(app, job: dict, song: dict):
                 lyricfit.phrases(abc, plan)
             except Exception as e:
                 print("프레이즈 나누기 실패(2마디 기준 그대로):", e)
-        mood = _melody_mood(src, first) if opts.get("follow_mood", True) else None
+        rap = opts["voice"].startswith("rap")
+        lyr_plan = lyrics.rap_plan(plan["seconds"]) if rap else plan
+        mood = _melody_mood(src, first) if opts.get("follow_mood", True) and not rap else None
         job["mood"] = _mood_view(mood)
         job.update(stage="lyrics", eta_sec=FINAL_ETA(plan["seconds"]), seconds=plan["seconds"])
         if remix["lyrics"]:
-            sections, dropped = lyrics.normalize_sections(remix["lyrics"], plan)
+            sections, dropped = lyrics.normalize_sections(remix["lyrics"], lyr_plan)
             if dropped:
                 job["lyrics_dropped"] = dropped
             words = {"title": remix.get("title") or (base["title"] if base else job["prompt"]), "style": base["style"] if base else "",
@@ -687,18 +694,21 @@ async def _run_final_now(app, job: dict, song: dict):
         elif remix["keep_lyrics"] and same_form:
             words = {"title": base["title"], "style": base["style"], "cover": base.get("scene", ""), "sections": base["lyrics"], "miss": base.get("syllable_miss")}
         else:
-            words = await lyrics.write(job["prompt"], plan, seed, mood, T.talk_lines(opts.get("talk")))
+            words = await lyrics.write(job["prompt"], lyr_plan, seed, mood, T.talk_lines(opts.get("talk")), rap=rap)
             # 새로 쓴 가사일 때만 스타일·표지를 멜로디 느낌에 맞춘다(가사·스타일을 지킨 다시 만들기는 그대로)
             words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
             if mood and words["cover"]:
                 words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
-        if sung:  # 가사가 정해지면 줄마다 음표 수 = 한글 글자 수로 맞춘다(다음 줄 글자를 당겨 부르지 않게)
+        if rap:  # 모델이 붙인 R&B·Lo-fi 같은 태그가 힙합 느낌을 흐려서(2026-11-10) 랩 태그만 쓴다
+            words["style"] = lyrics.RAP_STYLE
+            words["sections"] = lyrics.rap_clean(words["sections"])
+        if sung and not rap:  # 가사가 정해지면 줄마다 음표 수 = 한글 글자 수로 맞춘다(다음 줄 글자를 당겨 부르지 않게)
             try:
                 abc, job["lyric_fit"] = lyricfit.fit(abc, plan, words["sections"])
             except Exception as e:
                 print("가사-음표 맞추기 실패(원래 악보로):", e)
-        text = lyrics.yue_lyrics(plan, words["sections"]) if sung else "[Instrumental]"
-        style = _style(remix["style"] or words["style"], opts["voice"])
+        text = (lyrics.rap_text(words["sections"]) if rap else lyrics.yue_lyrics(plan, words["sections"])) if sung else "[Instrumental]"
+        style = _style(words["style"] if rap else (remix["style"] or words["style"]), opts["voice"])
         # 만드는 동안 먼저 보여 줄 것(첫 결과가 준비되면 알린다) — 노래를 기다리는 3분이 덜 지루하게
         job.update(stage="cover", title=words["title"], lyrics=words["sections"] if sung else {}, style=style)
         cover_file, audio_file = f"cover_{job['id']}.png", f"final_{job['id']}.flac"
@@ -864,10 +874,16 @@ async def write_lyrics(request):
         lyricfit.phrases(abc, plan)
     except Exception as e:
         print("프레이즈 나누기 실패:", e)
-    mood = _melody_mood(src, first) if body.get("follow_mood", True) is not False else None
+    rap = str(body.get("voice", "")).startswith("rap")
+    if rap:
+        plan = lyrics.rap_plan(plan["seconds"])
+    mood = _melody_mood(src, first) if body.get("follow_mood", True) is not False and not rap else None
     talk = T.sanitize(body.get("talk")) if body.get("talk") else None
-    words = await lyrics.write(prompt, plan, int(uuid.uuid4().int % 2**31), mood, T.talk_lines(talk))
-    words["style"] = melody_mood.merge_style(words["style"], mood, prompt, vocal=True)
+    words = await lyrics.write(prompt, plan, int(uuid.uuid4().int % 2**31), mood, T.talk_lines(talk), rap=rap)
+    if rap:
+        words["style"], words["sections"] = lyrics.RAP_STYLE, lyrics.rap_clean(words["sections"])
+    else:
+        words["style"] = melody_mood.merge_style(words["style"], mood, prompt, vocal=True)
     if mood and words["cover"]:
         words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
     lines = {}
