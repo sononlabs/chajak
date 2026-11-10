@@ -580,7 +580,9 @@ async def start_final(request):
     remix = {"base": base, "keep_lyrics": bool(body.get("keep_lyrics", False)), "keep_cover": bool(body.get("keep_cover", False)),
              "lyrics": body.get("lyrics") if isinstance(body.get("lyrics"), dict) else None,
              "style": str(body.get("style", "")).strip() or None,
-             "edit": str(body.get("edit", "")).strip()[:200] or None}
+             "edit": str(body.get("edit", "")).strip()[:200] or None,
+             "title": str(body.get("title", "")).strip()[:40] or None,
+             "cover": str(body.get("cover", "")).strip()[:400] or None}
     if remix["edit"] and base is None:
         raise ApiError(400, "BAD_OPTION", "말로 고치기는 바탕이 될 노래 버전(from)이 있어야 해요.")
     job_id = uuid.uuid4().hex[:12]
@@ -679,7 +681,8 @@ async def _run_final_now(app, job: dict, song: dict):
             sections, dropped = lyrics.normalize_sections(remix["lyrics"], plan)
             if dropped:
                 job["lyrics_dropped"] = dropped
-            words = {"title": base["title"] if base else job["prompt"], "style": base["style"] if base else "", "cover": base.get("scene", "") if base else "",
+            words = {"title": remix.get("title") or (base["title"] if base else job["prompt"]), "style": base["style"] if base else "",
+                     "cover": remix.get("cover") or (base.get("scene", "") if base else ""),
                      "sections": sections, "miss": None}
         elif remix["keep_lyrics"] and same_form:
             words = {"title": base["title"], "style": base["style"], "cover": base.get("scene", ""), "sections": base["lyrics"], "miss": base.get("syllable_miss")}
@@ -842,6 +845,39 @@ async def talk_digest(request):
     return _json_ok(story)
 
 
+async def write_lyrics(request):
+    """가사 미리 보기(2026-11-10): 노래를 만들지 않고 가사만 쓴다. JSON {prompt, seconds, voice, follow_mood, talk}.
+    → {title, style, cover, sections: {절: [줄]…}, lines: {구간: [줄마다 글자 수 목표]}, seconds, mood}. 약 1분.
+    고친 가사는 POST /v1/songs/{id}/final 의 lyrics(+title·style·cover)로 넘긴다. 곡 구성은 노래 만들기와 같다(멜로디 반영 70 이상)."""
+    store: Store = request.app["store"]
+    song = store.load(request.match_info["song_id"])
+    if not song.get("tracks"):
+        raise ApiError(409, "NO_MELODY", "이 곡에는 멜로디가 없어요.")
+    body = await _json(request)
+    prompt = str(body.get("prompt", "")).strip() or lyrics.random_theme()
+    seconds = float(min(180, max(60, float(body.get("seconds", FINAL_SECONDS)))))
+    first = song["tracks"][0]
+    src = first["abc"]
+    out = await request.app["comfy"].run(C.song_form_graph(src, seconds, True), front=True)
+    abc, plan = C.text(out, "abc_out"), json.loads(C.text(out, "plan_out"))
+    try:
+        lyricfit.phrases(abc, plan)
+    except Exception as e:
+        print("프레이즈 나누기 실패:", e)
+    mood = _melody_mood(src, first) if body.get("follow_mood", True) is not False else None
+    talk = T.sanitize(body.get("talk")) if body.get("talk") else None
+    words = await lyrics.write(prompt, plan, int(uuid.uuid4().int % 2**31), mood, T.talk_lines(talk))
+    words["style"] = melody_mood.merge_style(words["style"], mood, prompt, vocal=True)
+    if mood and words["cover"]:
+        words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
+    lines = {}
+    for sec in plan["sections"]:
+        if sec.get("sung") and sec["name"] not in lines:
+            lines[sec["name"]] = sec.get("syllables", [])
+    return _json_ok({"title": words["title"], "style": words["style"], "cover": words["cover"], "sections": words["sections"],
+                     "lines": lines, "seconds": plan["seconds"], "prompt": prompt, "mood": _mood_view(mood)})
+
+
 async def song_form(request):
     """곡 구성 미리보기(플로우 1 '가사 구간 판정 → 구간별 길이 추정'): ?seconds=60|120|180.
     → {seconds, tempo, key, sections: [{name, bars, sung, start_sec, syllables: [줄마다 음표 수 = 글자 수 목표]}]}.
@@ -988,6 +1024,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/v1/talk/{talk_id}", talk_status),
         web.post("/v1/talk/digest", talk_digest),
         web.get("/v1/songs/{song_id}/form", song_form),
+        web.post("/v1/songs/{song_id}/lyrics", write_lyrics),
         web.post("/v1/songs/{song_id}/final", start_final),
         web.get("/v1/songs/{song_id}/final/audio", final_audio),
         web.get("/v1/songs/{song_id}/final/cover", final_cover),

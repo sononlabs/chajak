@@ -168,7 +168,30 @@ def hangul(line: str) -> int:
     return sum(1 for ch in line if "가" <= ch <= "힣")
 
 
-def _fit_phrase(evs: list[Ev], idx: list[int], want: int) -> None:
+def _word_ends(line: str) -> list[int]:
+    """줄의 어절마다 마지막 글자 번호(한글 글자만 센다). '맘 흔들려요' → [0, 4]."""
+    ends, n = [], 0
+    for w in line.split():
+        c = hangul(w)
+        if c:
+            n += c
+            ends.append(n - 1)
+    return ends
+
+
+def _shape_words(notes: list[Ev], ends: list[int]) -> None:
+    """낱말 경계를 음 길이에 맞춘다(2026-11-10 사용자: 멜로디와 가사가 따로 논다). 어절 끝 글자가 짧은 음인데
+    바로 다음 어절 첫 글자가 두 배 넘게 긴 음이면 두 음의 길이를 바꾼다 — 한국어는 어절 끝을 늘이고 다음 어절을 짧게 시작해야
+    '맘 흔들려요신 호등'처럼 들리지 않는다. 음 높이 차례와 줄 전체 길이는 그대로."""
+    for e in ends[:-1]:
+        if e + 1 >= len(notes):
+            break
+        a, b = notes[e], notes[e + 1]
+        if a.pitch and b.pitch and b.dur >= 2 * a.dur:
+            a.dur, b.dur = b.dur, a.dur
+
+
+def _fit_phrase(evs: list[Ev], idx: list[int], want: int, ends: list[int] | None = None) -> None:
     """프레이즈의 음 사건(idx)을 want 개로: 많으면 가장 짧은 이웃 둘을 합치고, 적으면 가장 긴 음을 둘로 나눈다(같은 음높이)."""
     notes = [evs[i] for i in idx]
     want = max(1, want)
@@ -183,6 +206,8 @@ def _fit_phrase(evs: list[Ev], idx: list[int], want: int) -> None:
         half = notes[k].dur / 2
         h1 = round(half) if notes[k].dur >= 2 else half
         notes[k:k + 1] = [Ev(notes[k].pitch, h1), Ev(notes[k].pitch, notes[k].dur - h1)]
+    if ends and len(notes) == want:
+        _shape_words(notes, ends)
     # 원래 자리(첫 음 자리)에 새 음들을, 나머지 자리는 지운다
     first = idx[0]
     for i in reversed(idx):
@@ -211,8 +236,8 @@ def fit(abc: str, plan: dict, sections: dict) -> tuple[str, list]:
             if j < len(lyr):
                 want = hangul(lyr[j])
                 report.append([name, j, want, len(groups[j])])
-                if want and want != len(groups[j]):
-                    _fit_phrase(evs, groups[j], want)
+                if want:
+                    _fit_phrase(evs, groups[j], want, _word_ends(lyr[j]))
             else:  # 가사 줄이 모자라면 그 프레이즈는 쉰다(엔진이 다음 가사를 당겨 부르지 않게)
                 for i in groups[j]:
                     evs[i] = Ev(None, evs[i].dur)

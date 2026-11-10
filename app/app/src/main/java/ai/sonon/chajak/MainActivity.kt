@@ -1363,13 +1363,15 @@ class MainActivity : Activity() {
                 })
                 addView(caption("따르면 음표에서 잰 느낌(빠르기·도약·장단조)으로 장르·악기·템포·창법과 가사 말투를 고르고, 주제는 가사의 장면으로 써요.", TEXT3))
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-            addView(caption("한 소절을 전주·절·후렴·브리지로 늘리고, 주제로 가사·제목을 쓰고, 앨범 표지를 그려 노래로 만들어요. 약 3분 — 주행을 시작해도 계속 만들어요.", TEXT3).withMargin(top = 16))
+            addView(caption("한 소절을 전주·절·후렴·브리지로 늘리고, 주제로 가사·제목을 쓰고, 앨범 표지를 그려 노래로 만들어요. 약 3분 — 주행을 시작해도 계속 만들어요. " +
+                            "'가사 먼저 보기'로 가사를 보고 고친 뒤 만들 수도 있어요(약 1분).", TEXT3).withMargin(top = 16))
+            s.optJSONObject("final")?.let { addView(button("완성된 노래 →", size = Size.MEDIUM) { showPlayer(false) }.withMargin(top = 16)) }
         }, ::showCreate, tabs = true) {
             zones(button("← 내 멜로디") { showSong(false) },
                 listOf(if (making) recordButton(Rec.BUSY, "만드는 중" + queueTail(), onClick = null)
                        else button("노래 만들기", Btn.SECONDARY) { createFinal() }),
                 if (job != null) button("＋ 하나 더(대기열)") { createFinal() }
-                else s.optJSONObject("final")?.let { button("완성된 노래 →") { showPlayer(false) } })
+                else button("가사 먼저 보기") { lyricDraft = null; showLyricsPreview() })
         }
     }
 
@@ -1845,7 +1847,7 @@ class MainActivity : Activity() {
         }, { showFormPreview(t, form) }, tabs = true) {
             zones(button("← 멜로디 다시 고르기") { showPickMelody(t) },
                   listOf(button("이대로 노래 만들기", Btn.SECONDARY) { createFinal(); rememberTalkSong(t, s.getString("id")) }),
-                  button("세부 설정") { showCreate() })
+                  button("가사 먼저 보기") { lyricDraft = null; showLyricsPreview() })
         }
     }
 
@@ -2126,7 +2128,8 @@ class MainActivity : Activity() {
         addView(text(help, BODY_S, TEXT3))
     }
 
-    private fun createFinal(from: String? = null, keepLyrics: Boolean = false, lyrics: JSONObject? = null, keepCover: Boolean = false, edit: String? = null) {
+    private fun createFinal(from: String? = null, keepLyrics: Boolean = false, lyrics: JSONObject? = null, keepCover: Boolean = false, edit: String? = null,
+                            extra: JSONObject? = null) {
         val s = song ?: return
         if (finalSubmitting || recording || counting || TalkRecordService.recording) return
         // 만드는 중에 또 누르면 대기열로(2026-11-10 사용자) — 서버가 차례대로 만든다. 화면은 그대로 두고 알려만 준다
@@ -2141,6 +2144,7 @@ class MainActivity : Activity() {
             .put("melody_weight", melodyWeight).put("style_weight", styleWeight).put("follow_mood", followMood)
         if (from != null) options.put("from", from).put("keep_lyrics", keepLyrics).put("keep_cover", keepCover)
         if (lyrics != null) options.put("lyrics", lyrics)
+        extra?.keys()?.forEach { k -> options.put(k, extra.get(k)) }
         if (!edit.isNullOrBlank()) options.put("edit", edit)
         if (from == null) talkPayload(s)?.let { options.put("talk", it) }
         if (talkResult == null || talkFor != s.optString("id")) autoPickNote = null
@@ -2170,6 +2174,86 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    // ------------------------------------------------------------------ 가사 미리 보기(2026-11-10 사용자: 가사가 별로 — 보고 고친 뒤 노래로)
+
+    /** 서버가 쓴 가사 초안: {title, style, cover, sections, lines(줄마다 글자 수 목표), seconds}. */
+    private var lyricDraft: JSONObject? = null
+    private var lyricEdits = mutableMapOf<String, EditText>()
+    private var lyricTitle: EditText? = null
+
+    private fun showLyricsPreview() {
+        val s = song ?: return showHome()
+        val d = lyricDraft
+        if (d == null) {
+            show({
+                addView(steps(2, busy = true))
+                addView(headline("가사를 쓰는 중"))
+                addView(body("주제 · 멜로디 느낌" + (if (talkPayload(s) != null) " · 대화 이야기" else "") + "로 가사를 쓰고 있어요. 약 1분. 다 쓰면 보고 고칠 수 있어요."))
+            }, {}) { zones(button("← 노래 만들기") { showCreate() }, listOf(recordButton(Rec.BUSY, "가사 쓰는 중", onClick = null))) }
+            val body = JSONObject().put("prompt", prompt).put("seconds", finalSeconds).put("follow_mood", followMood)
+            talkPayload(s)?.let { body.put("talk", it) }
+            io.execute {
+                try {
+                    val r = api.writeLyrics(s.getString("id"), body)
+                    ui.post { lyricDraft = r; if (active && song?.optString("id") == s.optString("id")) showLyricsPreview() }
+                } catch (e: Exception) {
+                    ui.post { if (active) showError(e.message ?: "가사를 쓰지 못했어요.") }
+                }
+            }
+            return
+        }
+        val names = mapOf("verse" to "절", "verse2" to "절 2", "chorus" to "후렴", "bridge" to "브리지")
+        lyricEdits = mutableMapOf()
+        show({
+            addView(steps(2))
+            addView(headline("이 가사로 부를까요?"))
+            addView(body("줄을 고치거나 다시 쓸 수 있어요. 줄마다 글자 수는 대략이면 돼요 — 멜로디를 가사에 맞춰 불러요." + (if (driving) " 고치기는 정차 중에만 돼요." else "")))
+            addView(label("제목"))
+            lyricTitle = EditText(this@MainActivity).apply {
+                setText(d.optString("title")); isSingleLine = true; isEnabled = !driving
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, TITLE.size.toFloat()); setTextColor(TEXT)
+                background = round(SURFACE, 24, TINT_PRESSED); setPadding(dp(28), dp(16), dp(28), dp(16))
+            }
+            addView(lyricTitle, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val secs = d.optJSONObject("sections") ?: JSONObject()
+            val lines = d.optJSONObject("lines") ?: JSONObject()
+            secs.keys().forEach { k ->
+                val a = secs.optJSONArray(k) ?: return@forEach
+                val want = lines.optJSONArray(k)
+                addView(label((names[k] ?: k) + (want?.let { w -> " · 줄마다 대략 " + (0 until w.length()).joinToString("·") { w.optInt(it).toString() } + "자" } ?: "")))
+                val e = EditText(this@MainActivity).apply {
+                    setText((0 until a.length()).joinToString("\n") { a.optString(it) })
+                    isEnabled = !driving
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, BODY.size.toFloat()); setTextColor(TEXT)
+                    typeface = faces.getOrPut(BODY.font) { resources.getFont(BODY.font) }
+                    background = round(SURFACE, 24, TINT_PRESSED); setPadding(dp(28), dp(16), dp(28), dp(16))
+                    inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    isSingleLine = false; minLines = a.length()
+                }
+                lyricEdits[k] = e
+                addView(e, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+        }, { showLyricsPreview() }, tabs = true) {
+            zones(button("다시 쓰기") { lyricDraft = null; showLyricsPreview() },
+                  listOf(button("이 가사로 노래 만들기", Btn.SECONDARY) { useLyricDraft() }),
+                  button("← 노래 만들기") { showCreate() })
+        }
+    }
+
+    /** 고친 가사 그대로 노래 만들기(제목·스타일·표지 장면도 미리 쓴 것으로). */
+    private fun useLyricDraft() {
+        val d = lyricDraft ?: return
+        val lyr = JSONObject()
+        lyricEdits.forEach { (k, e) ->
+            val ls = e.text.toString().split("\n").map { it.trim() }.filter { it.isNotEmpty() }
+            if (ls.isNotEmpty()) lyr.put(k, org.json.JSONArray(ls))
+        }
+        if (lyr.length() == 0) return
+        val extra = JSONObject().put("title", lyricTitle?.text?.toString()?.trim().orEmpty().ifEmpty { d.optString("title") })
+            .put("style", d.optString("style")).put("cover", d.optString("cover"))
+        createFinal(lyrics = lyr, extra = extra)
     }
 
     /** 대기열: 지금 만드는 것 뒤에 서버에 넣어 둔 노래 작업들(앱을 다시 켜도 이어지게 prefs 에). */

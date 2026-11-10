@@ -73,6 +73,9 @@ class ChajakApi(val base: String) {
     fun talkDigest(lines: org.json.JSONArray, direction: String): JSONObject =
         request("POST", "/v1/talk/digest", JSONObject().put("lines", lines).put("direction", direction))
 
+    /** 가사만 쓰기(노래 만들기 전 미리 보기). 약 1분이라 4분까지 기다린다. */
+    fun writeLyrics(songId: String, body: JSONObject): JSONObject = request("POST", "/v1/songs/$songId/lyrics", body, 240_000)
+
     /** 곡 구성 미리보기: 가사 들어갈 구간과 줄마다 글자 수 목표. */
     fun songForm(songId: String, seconds: Int): JSONObject = request("GET", "/v1/songs/$songId/form?seconds=$seconds", null, 60_000)
 
