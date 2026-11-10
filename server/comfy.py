@@ -1,12 +1,14 @@
 """ComfyUI 를 생성 엔진으로 쓰는 클라이언트와 차작 그래프(API 형식).
 
-ComfyUI 실행 조건: --whitelist-custom-nodes pleos_melody_instrument (Pleos* 노드),
+ComfyUI 실행 조건: --disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument (Pleos* 노드만;
+whitelist 만 주면 다른 커스텀 노드도 모두 올라온다),
 SheetSage2 / YuE2 모델이 models 폴더에 있어야 한다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import re
@@ -36,6 +38,10 @@ VARIATIONS = {
 SERVER_VARIATIONS = {"rewrite"}
 NO_MELODY_HINTS =("MelodyVoice", "멜로디 음표를 찾지 못", "ABC 텍스트가 비어", "음표가 없")
 NO_VOICE_HINTS = ("음성 구간을 찾지 못",)
+
+
+DOWN_WAIT = 300  # ComfyUI 재시작(모델 다시 올리기 포함)을 기다리는 최대 시간(초)
+FREE_WAIT = 3  # /free 가 처리될 틈(초)
 
 
 class ComfyError(RuntimeError):
@@ -76,6 +82,16 @@ class Comfy:
             info = await r.json()
         return info["PleosSoundFontRender"]["input"]["required"]["instrument"][1]["options"]
 
+    async def extra_custom_nodes(self) -> list[str]:
+        """차작 노드(pleos_melody_instrument) 말고 올라와 있는 커스텀 노드 폴더.
+        2026-11-10: ComfyUI-Manager 가 노드를 설치하며 --disable-all-custom-nodes 없이 다시 켜서 50여 개가 함께 올라왔고,
+        그중 HeartMuLa 가 3B 모델을 VRAM 에 계속 붙잡아 노래 한 곡이 1시간 넘게 걸렸다."""
+        async with self.session.get(self.base + "/object_info") as r:
+            info = await r.json()
+        mods = {v.get("python_module", "") for v in info.values()}
+        return sorted(m.split(".", 1)[1] for m in mods
+                      if m.startswith("custom_nodes.") and m != "custom_nodes.pleos_melody_instrument")
+
     async def upload(self, data: bytes, filename: str) -> str:
         form = aiohttp.FormData()
         form.add_field("image", data, filename=filename, content_type="application/octet-stream")
@@ -87,26 +103,65 @@ class Comfy:
             j = await r.json()
         return f"{j['subfolder']}/{j['name']}" if j.get("subfolder") else j["name"]
 
-    async def run(self, prompt: dict, front: bool = False, poll: float = 0.15) -> dict:
-        """그래프를 실행하고 history 항목의 outputs 를 돌려준다. front=True 면 대기열 맨 앞에 넣는다."""
-        body = {"prompt": prompt, "client_id": self.client_id, "front": front}
-        async with self.session.post(self.base + "/prompt", json=body) as r:
-            j = await r.json()
-        if "prompt_id" not in j:
-            raise ComfyError(f"ComfyUI 가 요청을 거부했습니다: {j.get('error', j)}")
-        pid = j["prompt_id"]
+    async def _call(self, method: str, path: str, **kw):
+        """ComfyUI 요청. 재시작 중(연결 끊김)이면 DOWN_WAIT 초까지 다시 시도한다(2026-11-10: 노드 설치로 재시작되며 노래가 끊겼다)."""
+        t0 = asyncio.get_running_loop().time()
         while True:
-            async with self.session.get(f"{self.base}/history/{pid}") as r:
-                h = await r.json()
-            if pid in h:
+            try:
+                async with self.session.request(method, self.base + path, **kw) as r:
+                    body = await r.text()
+                return json.loads(body) if body.strip() else {}  # /free 처럼 빈 응답도 있다
+            except (aiohttp.ClientConnectionError, asyncio.TimeoutError, OSError) as e:
+                if asyncio.get_running_loop().time() - t0 > DOWN_WAIT:
+                    raise ComfyError(f"ComfyUI 에 연결할 수 없습니다({DOWN_WAIT}초 기다림): {e}") from e
+                await asyncio.sleep(3)
+
+    async def free(self):
+        """올려 둔 모델을 내리고 VRAM 을 비운다.
+        2026-11-10 안정성 시험: 표지(Qwen-Image, 약 19.5GB)를 그린 뒤 노래 모델이 올라가면 VRAM 16GB 를 넘겨 공유 메모리로 넘쳤고,
+        노래 한 곡이 20분 넘게 끝나지 않았다."""
+        try:
+            await self._call("POST", "/free", json={"unload_models": True, "free_memory": True})
+            await asyncio.sleep(FREE_WAIT)  # ComfyUI 는 /free 를 대기열이 빈 틈에 처리한다 — 바로 다음 작업을 넣으면 비우기보다 작업이 먼저 돈다
+        except Exception as e:
+            print("ComfyUI 메모리 비우기 실패(계속 진행):", e, flush=True)
+
+    async def run(self, prompt: dict, front: bool = False, poll: float = 0.15, retries: int = 1) -> dict:
+        """그래프를 실행하고 history 항목의 outputs 를 돌려준다. front=True 면 대기열 맨 앞에 넣는다.
+        도중에 ComfyUI 가 재시작돼 작업이 사라지면(대기열·기록 어디에도 없음) 한 번 다시 넣는다 — 전에는 기록을 영원히 기다려 대기열 전체가 멈췄다."""
+        for attempt in range(retries + 1):
+            j = await self._call("POST", "/prompt", json={"prompt": prompt, "client_id": self.client_id, "front": front})
+            if "prompt_id" not in j:
+                raise ComfyError(f"ComfyUI 가 요청을 거부했습니다: {j.get('error', j)}")
+            pid = j["prompt_id"]
+            item = await self._wait(pid, poll)
+            if item is not None:
                 break
-            await asyncio.sleep(poll)
-        item = h[pid]
+            if attempt == retries:
+                raise ComfyError("ComfyUI 가 다시 시작되어 작업이 끊겼습니다")
+            print(f"ComfyUI 작업 {pid[:8]} 이 사라짐(재시작?) — 다시 넣는다", flush=True)
         for kind, msg in item["status"].get("messages", []):
             if kind == "execution_error":
                 text = msg.get("exception_message", "")
                 raise ComfyError(text.strip(), msg.get("node_type", ""))
         return item["outputs"]
+
+    async def _wait(self, pid: str, poll: float) -> dict | None:
+        """기록에 나오면 그 항목, 대기열·기록 어디에도 없으면(재시작·대기열 비우기) None."""
+        loop = asyncio.get_running_loop()
+        next_check = loop.time() + 5
+        while True:
+            h = await self._call("GET", f"/history/{pid}")
+            if pid in h:
+                return h[pid]
+            if loop.time() >= next_check:
+                next_check = loop.time() + 5
+                q = await self._call("GET", "/queue")
+                ids = {t[1] for t in q.get("queue_running", []) + q.get("queue_pending", []) if len(t) > 1}
+                if pid not in ids:
+                    h = await self._call("GET", f"/history/{pid}")  # 막 끝난 경우
+                    return h.get(pid)
+            await asyncio.sleep(poll)
 
     async def fetch_image(self, outputs: dict, node: str) -> bytes:
         return await self.fetch_audio(outputs, node, kind="images")
@@ -248,8 +303,11 @@ COVER_VAE = "z_image_ae.safetensors"
 
 
 # 2026-11-08 비교(리서치 39 6절): Qwen-Image-2512 + Lightning 4단계가 글자 새는 일·장면 반영이 더 낫다.
-# 곡 끝까지 재 보니(노래 모델 YuE2 와 교대 포함) 표지 15→19초, 곡 전체 약 159→161초 → 기본을 Qwen 으로. 되돌리려면 CHAJAK_COVER_MODEL=zimage
-COVER_MODEL = os.environ.get("CHAJAK_COVER_MODEL", "qwen2512")
+# 곡 끝까지 재 보니(노래 모델 YuE2 와 교대 포함) 표지 15→19초, 곡 전체 약 159→161초.
+# 2026-11-10 안정성 시험 뒤 기본을 다시 Z-Image 로: Qwen 은 본체 19.5GB+글 모델 7.9GB 로 VRAM 16GB 를 넘겨 나눠 올리므로,
+# 사용자가 다른 GPU 작업을 하거나 에뮬레이터가 VRAM 을 잡고 있으면 가장 먼저 느려진다(Z-Image 는 4.3GB+5.4GB).
+# 시연 품질을 우선하려면 CHAJAK_COVER_MODEL=qwen2512
+COVER_MODEL = os.environ.get("CHAJAK_COVER_MODEL", "zimage")
 
 
 def cover_graph(prompt: str, seed: int, prefix: str) -> dict:

@@ -236,7 +236,9 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
 
 async def health(request):
     alive = await request.app["comfy"].alive()
-    return web.json_response({"ok": alive, "engine": "comfyui", "engine_alive": alive}, status=200 if alive else 503)
+    extra = request.app.get("extra_nodes", [])
+    return web.json_response({"ok": alive, "engine": "comfyui", "engine_alive": alive, "extra_custom_nodes": len(extra)},
+                             status=200 if alive else 503)
 
 
 async def instruments(request):
@@ -721,6 +723,7 @@ async def _run_final_now(app, job: dict, song: dict):
             cover_prompt = f"{COVER_NO_TEXT}. {scene}. album cover art, square composition, cinematic soft light, painterly illustration. {COVER_NO_TEXT}"
             out = await cf.run(C.cover_graph(cover_prompt, seed, f"chajak_server/{song['id']}_cover"))
             (d / cover_file).write_bytes(await cf.fetch_image(out, "save"))
+            await cf.free()  # 표지 모델을 내리고 노래 모델을 올린다(둘 다 올라가 있으면 VRAM 이 넘쳐 노래가 몇십 분씩 걸렸다)
         job["_cover"] = str(d / cover_file)
         job["cover_url"] = f"/v1/jobs/{job['id']}/cover"
         job["stage"] = "music"
@@ -1006,10 +1009,20 @@ def make_app(comfy_url: str) -> web.Application:
         for _ in range(60):
             try:
                 app["instruments"] = await app["comfy"].instruments()
-                return
+                break
             except aiohttp.ClientConnectionError:
                 await asyncio.sleep(2)
-        app["instruments"] = await app["comfy"].instruments()
+        else:
+            app["instruments"] = await app["comfy"].instruments()
+        try:
+            app["extra_nodes"] = await app["comfy"].extra_custom_nodes()
+        except Exception as e:
+            app["extra_nodes"] = []
+            print("커스텀 노드 목록을 읽지 못함:", e, flush=True)
+        if app["extra_nodes"]:
+            print(f"경고: ComfyUI 에 차작 노드 말고 커스텀 노드 {len(app['extra_nodes'])}개가 올라와 있습니다"
+                  f"({', '.join(app['extra_nodes'][:5])} 등). 모델을 VRAM 에 붙잡아 노래가 몹시 느려질 수 있으니 "
+                  "--disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument 로 다시 켜세요.", flush=True)
 
     async def on_stop(app):
         app["job_saver"].cancel()

@@ -1,6 +1,6 @@
 # 차작 서버 (chajak-server)
 
-차량 앱이 허밍 녹음을 올리면 음표로 바꿔 연주하고(내 멜로디), 그 한 소절을 2분짜리 노래(가사·앨범 표지·노래)로 만들어 돌려주는 HTTP API입니다. 생성 엔진은 같은 PC에서 도는 ComfyUI(`pleos_melody_instrument` 노드 + SheetSage2 + YuE2 + Qwen-Image-2512 표지. `CHAJAK_COVER_MODEL=zimage` 로 Z-Image Turbo 로 되돌릴 수 있음)와 Ollama 로컬 LLM(`gemma3:12b`, 가사·말로 바꾸기. `CHAJAK_LYRICS_MODEL` 로 바꿀 수 있음)이고, 이 서버는 그 앞에서 요청·저장·믹스·작업 관리를 맡습니다.
+차량 앱이 허밍 녹음을 올리면 음표로 바꿔 연주하고(내 멜로디), 그 한 소절을 2분짜리 노래(가사·앨범 표지·노래)로 만들어 돌려주는 HTTP API입니다. 생성 엔진은 같은 PC에서 도는 ComfyUI(`pleos_melody_instrument` 노드 + SheetSage2 + YuE2 + Z-Image Turbo 표지. `CHAJAK_COVER_MODEL=qwen2512` 로 Qwen-Image-2512 를 쓸 수 있음)와 Ollama 로컬 LLM(`gemma3:12b`, 가사·말로 바꾸기. `CHAJAK_LYRICS_MODEL` 로 바꿀 수 있음)이고, 이 서버는 그 앞에서 요청·저장·믹스·작업 관리를 맡습니다.
 
 > YuE2 는 비상업(CC BY-NC) 라이선스라 공모전 시연용입니다. 상용은 다른 엔진으로 바꿉니다.
 
@@ -21,6 +21,13 @@ cd server
 
 - 서버는 `127.0.0.1`에만 열립니다. Android 에뮬레이터는 `http://10.0.2.2:8790`으로 접속합니다.
 - 곡은 `storage/<곡 id>/`에 저장되어 서버를 다시 켜도 남습니다(`song.json`, 원본 허밍, 트랙·믹스 음원). 작업 상태(`/v1/jobs`)는 `storage/jobs.json` 에 3초마다 저장되고, 다시 켜면 끝나지 않은 작업은 "서버가 다시 켜지면서 멈췄어요" 실패로 남습니다(앱이 이유를 보여 준다).
+
+## 운영 규칙 (2026-11-10 안정성 시험)
+
+- ComfyUI 는 반드시 `--disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument` 로 켠다. `--whitelist-custom-nodes` 만 주면 다른 커스텀 노드가 모두 올라오고, 모델을 VRAM 에 붙잡는 노드(예: HeartMuLa)가 있으면 노래 한 곡이 1시간 넘게 걸린다. 서버는 시작할 때 이를 경고하고 `GET /health` 의 `extra_custom_nodes` 로 보여 준다.
+- 이 ComfyUI 에 ComfyUI-Manager 로 노드를 설치하지 않는다(설치 뒤 옵션 없이 다시 켜진다).
+- 실측(RTX 5070 Ti 16GB, 에뮬레이터 두 대 켠 채): 노래 약 165초, 랩 약 270초. 다른 GPU 작업(VRAM 4GB+계산)을 함께 하면 250~390초로 느려지지만 끝난다.
+- 노래 도중 ComfyUI 가 다시 켜지면 서버가 최대 300초 기다렸다가 작업을 한 번 다시 넣는다.
 
 ## API
 
