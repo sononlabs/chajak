@@ -39,7 +39,13 @@ class TalkRecordService : Service() {
             .build()
         if (android.os.Build.VERSION.SDK_INT >= 30) startForeground(2, note, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         else startForeground(2, note)
-        val out = File(intent?.getStringExtra(EXTRA_FILE) ?: return START_NOT_STICKY)
+        val path = intent?.getStringExtra(EXTRA_FILE)
+        if (path == null) {  // 파일 없이 불리면 알림만 남지 않게 바로 끝낸다
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val out = File(path)
         val deviceId = intent.getIntExtra(EXTRA_DEVICE, -1)
         try {
             val r = (if (android.os.Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else @Suppress("DEPRECATION") MediaRecorder()).apply {
@@ -52,6 +58,8 @@ class TalkRecordService : Service() {
                 setMaxDuration(MAX_MS)
                 setOutputFile(out.absolutePath)
                 setOnInfoListener { _, what, _ -> if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) finishRecording() }
+                // 마이크를 다른 앱이 가져가는 등 녹음이 깨지면 거기서 끝낸다(전에는 '녹음 중' 알림이 계속 남았다)
+                setOnErrorListener { _, what, extra -> Log.w("TalkRecord", "녹음 오류 $what/$extra"); finishRecording() }
                 if (deviceId >= 0) getSystemService(AudioManager::class.java).getDevices(AudioManager.GET_DEVICES_INPUTS)
                     .firstOrNull { it.id == deviceId }?.let { setPreferredDevice(it) }
                 prepare()

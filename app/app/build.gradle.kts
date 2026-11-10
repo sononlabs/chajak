@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -15,6 +17,30 @@ android {
         versionName = "0.4.11-drive"
         // 차작 서버 주소. 에뮬레이터 기본 = PC(10.0.2.2). 심사용 APK 는 ./gradlew assembleDebug -PchajakServer=https://… 로 바꿔 빌드
         buildConfigField("String", "SERVER_URL", "\"${(project.findProperty("chajakServer") ?: "http://10.0.2.2:8790")}\"")
+        // 서버 공유 토큰(저장소에 넣지 않는다): -PchajakToken=… 또는 이 PC 의 ~/.chajak/token(서버와 같은 파일)
+        val tokenFile = File(System.getProperty("user.home"), ".chajak/token")
+        val token = (project.findProperty("chajakToken") as String?) ?: (if (tokenFile.exists()) tokenFile.readText().trim() else "")
+        buildConfigField("String", "SERVER_TOKEN", "\"$token\"")
+    }
+    // 제출용 release 서명(2026-11-11, 44번 #5): 키와 비밀번호는 저장소 밖 ~/.chajak/keystore.properties 에만 둔다.
+    // 그 파일이 없는 PC 에서는 release 가 서명 없이 만들어진다(debug 빌드는 그대로).
+    val keyProps = Properties()
+    File(System.getProperty("user.home"), ".chajak/keystore.properties").takeIf { it.exists() }?.inputStream()?.use { keyProps.load(it) }
+    signingConfigs {
+        if (keyProps["storeFile"] as String? != null) create("upload") {
+            storeFile = file(keyProps["storeFile"] as String)
+            storePassword = keyProps["storePassword"] as String?
+            keyAlias = keyProps["keyAlias"] as String?
+            keyPassword = keyProps["keyPassword"] as String?
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfigs.findByName("upload")?.let { signingConfig = it }
+        }
     }
     buildFeatures {
         buildConfig = true

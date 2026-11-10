@@ -219,9 +219,9 @@ class ChajakMediaService : MediaLibraryService() {
 
     /** 서버 주소 + 캐시 깨기(트랙이 쌓이면 같은 주소가 캐시에 남는다). */
     private fun serverUrl(path: String, tracks: Int): String {
-        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        if (path.startsWith("http://") || path.startsWith("https://")) return ChajakApi.withToken(path)
         val query = if ("?" in path) path else "$path?v=$tracks"
-        return base + query
+        return ChajakApi.withToken(base + query)  // 차량 미디어 센터는 헤더를 못 붙여 주소에 토큰을 싣는다
     }
 
     // ------------------------------------------------------------------ 세션 콜백

@@ -51,7 +51,16 @@ class ChajakApi(val base: String) {
         return try { c.inputStream.use { it.readBytes() } } finally { c.disconnect() }
     }
 
-    fun url(path: String) = base + path
+    /** 서버 주소 + 토큰(?t=). 미리 듣기·차량 미디어 센터처럼 헤더를 못 붙이는 곳에서 쓴다. */
+    fun url(path: String) = withToken(base + path)
+
+    companion object {
+        /** 빌드 때 넣은 서버 공유 토큰(없으면 인증 없이). 서버 README '인증' 참고. */
+        val TOKEN: String = BuildConfig.SERVER_TOKEN
+
+        fun withToken(u: String): String =
+            if (TOKEN.isEmpty() || "t=" in u.substringAfter('?', "")) u else u + (if ('?' in u) "&" else "?") + "t=" + TOKEN
+    }
 
     private fun request(method: String, path: String, body: JSONObject?, readTimeoutMs: Int = 120_000): JSONObject {
         val c = open(path)
@@ -113,6 +122,7 @@ class ChajakApi(val base: String) {
     private fun open(path: String) = (URL(base + path).openConnection() as HttpURLConnection).apply {
         connectTimeout = 5_000
         readTimeout = 120_000
+        if (TOKEN.isNotEmpty()) setRequestProperty("X-Chajak-Token", TOKEN)
     }
 
     private fun read(c: HttpURLConnection): JSONObject {
@@ -126,6 +136,7 @@ class ChajakApi(val base: String) {
         val json = runCatching { JSONObject(text) }.getOrNull()
         if (status >= 400) {
             val err = json?.optJSONObject("error")
+            if (status == 401) throw ApiException("UNAUTHORIZED", err?.optString("message")?.ifEmpty { null } ?: "이 서버를 쓸 수 있는 앱이 아니에요.")
             throw ApiException(err?.optString("code")?.ifEmpty { null } ?: if (status == 404) "NOT_FOUND" else "HTTP_$status",
                                err?.optString("message")?.ifEmpty { null } ?: "오류가 났어요($status).")
         }

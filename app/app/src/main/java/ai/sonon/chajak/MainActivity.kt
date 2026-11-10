@@ -319,6 +319,11 @@ class MainActivity : Activity() {
         super.onDestroy()
         finalPollToken++
         finalPollThread?.interrupt()
+        talkPollToken++
+        talkPollThread?.interrupt()
+        scoreToken++                         // 재생 위치·악보 갱신 반복을 멈춘다(화면이 없어도 돌았다)
+        ui.removeCallbacksAndMessages(null)
+        TalkRecordService.onDone = null      // 서비스가 사라진 화면을 붙잡지 않게(onResume 에서 다시 건다)
         car?.disconnect()
         controller?.release()
         controller = null
@@ -339,7 +344,9 @@ class MainActivity : Activity() {
 
     /** 주행 규제가 켜지면 녹음을 막고, 녹음 중이면 바로 멈춘다(만들기는 정차 중 · 듣기는 주행 중). */
     private fun watchDriving() {
-        car = Car.createCar(this)
+        // 차량이 아닌 기기(android.car 없음)에서는 createCar 가 예외를 던진다 — 그때는 주행 규제 없이(정차로) 동작
+        if (android.os.Build.VERSION.SDK_INT < 29) return
+        car = runCatching { Car.createCar(this) }.onFailure { Log.w(tag, "차량 서비스 없음: ${it.message}") }.getOrNull()
         val m = car?.getCarManager(Car.CAR_UX_RESTRICTION_SERVICE) as? CarUxRestrictionsManager ?: return
         driving = m.currentCarUxRestrictions?.isRequiresDistractionOptimization == true
         m.registerListener { r ->
@@ -401,6 +408,11 @@ class MainActivity : Activity() {
             setPadding(dp(PAGE_H), dp(PAGE_V), dp(PAGE_H), dp(12))
             try { header() } catch (e: Exception) { Log.e(this@MainActivity.tag, "머리를 그리지 못함", e) }
         })
+        serverDownBar()?.let { b ->
+            page.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(PAGE_H), dp(16), dp(PAGE_H), 0)
+            })
+        }
         val col = column().apply {
             setPadding(dp(PAGE_H), if (header != null) dp(4) else dp(PAGE_V), dp(PAGE_H), dp(PAGE_V))
             // 서버 응답에 필드가 빠졌거나(옛 곡 등) 형식이 다르면 여기서 막는다 — ui.post 안의 예외는 io 의 try 로 못 잡는다
@@ -1631,7 +1643,11 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when {
                     done != null -> { talkJobDone = null; showTalkDetail(done) }
-                    err != null -> { talkJobError = null; showTalkIntro(err) }
+                    err != null -> {
+                        talkJobError = null
+                        val pending = talkPendingFile
+                        if (pending != null && pending.exists()) uploadTalk(pending, talkPendingAuto) else showTalkIntro(err)
+                    }
                     else -> { talkPickFor = null; showTalks() }
                 }
             }
@@ -1641,25 +1657,60 @@ class MainActivity : Activity() {
                 addView(text(when { done != null -> "보관함에 넣었어요 · ${done.optString("title").ifEmpty { "대화" }}"; err != null -> err.take(40); else -> talkJobLine() },
                              BODY_S, TEXT3).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(text(if (done != null) "보기 ›" else if (err != null) "다시 ›" else "", BODY_S_STRONG, if (err != null) RECORDING else POSITIVE))
+            addView(text(if (done != null) "보기 ›" else if (err != null) (if (talkPendingFile?.exists() == true) "다시 보내기 ›" else "다시 ›") else "",
+                         BODY_S_STRONG, if (err != null) RECORDING else POSITIVE))
             if (done != null || err != null) addView(iconButton("✕", "닫기") { talkJobDone = null; talkJobError = null; refresh() })
         }
     }
 
     /** 녹음 올리기 → 서버 분석 작업(받아쓰기 → 정리)을 뒤에서 기다려 보관함에 넣는다. 화면은 바로 돌려준다. */
+    /** 올리지 못한 대화 녹음(다시 보내기용). 올리고 나면 지운다. */
+    private var talkPendingFile: File? = null
+    private var talkPendingAuto = false
+    private var talkPollToken = 0
+    private var talkPollThread: Thread? = null
+
+    /**
+     * 대화 녹음 올리기 → 정리 결과 기다리기. 전용 스레드에서 한다(2026-11-11, 44번 #3: 전에는 io 단일 스레드를 수십 초~수 분
+     * 붙잡아 그동안 목록·노래 만들기 같은 다른 요청이 모두 멈췄다). 올리기가 실패하면 녹음을 지우지 않고 '다시 보내기'를 띄운다
+     * (전에는 바로 지워 30분 대화를 잃을 수 있었다). 상태 조회는 실패해도 간격을 늘려 8번까지 다시 묻고, 20분이 넘으면 그만둔다.
+     */
     private fun uploadTalk(file: File, autoMake: Boolean = false) {
         val direction = talkDirection
         talkJobStage = "upload"; talkJobEta = 0; talkJobDone = null; talkJobError = null
+        talkPendingFile = null
         // 바로 보관함(노래 만들기에서 왔으면 노래 만들기)으로 — 정리되는 동안 다른 탭을 써도 된다(오른쪽 위 표시)
         if (talkPickFor != null && song?.optString("id") == talkPickFor) showCreate() else showTalks()
-        io.execute {
+        val token = ++talkPollToken
+        talkPollThread?.interrupt()
+        talkPollThread = Thread {
+            val id = try {
+                api.talkStart(file, direction).getString("id")
+            } catch (e: Exception) {
+                Log.w(tag, "대화 녹음 올리기 실패: ${e.message}")
+                ui.post {
+                    if (token != talkPollToken || isDestroyed) return@post
+                    talkPendingFile = file; talkPendingAuto = autoMake
+                    talkJobStage = null
+                    talkJobError = (if (e is ApiException) e.message else null) ?: "녹음을 올리지 못했어요. 눌러서 다시 보내 주세요."
+                    if (active && !recording && !counting) refresh()
+                }
+                return@Thread
+            }
+            file.delete()  // 서버가 받았으니 녹음 파일은 앱에도 남기지 않는다
+            var lastStage = ""
+            var failures = 0
+            val deadline = System.currentTimeMillis() + 20 * 60_000L
             try {
-                val id = api.talkStart(file, direction).getString("id")
-                file.delete()  // 녹음 파일은 앱에도 남기지 않는다
-                var lastStage = ""
-                while (true) {
-                    Thread.sleep(2000)
-                    val st = api.talkStatus(id)
+                while (token == talkPollToken && !Thread.currentThread().isInterrupted) {
+                    Thread.sleep(if (failures == 0) 2000L else minOf(15000L, failures * 2500L))
+                    if (System.currentTimeMillis() > deadline) throw ApiException("TIMEOUT", "대화 정리가 너무 오래 걸려요. 잠시 후 다시 녹음해 주세요.")
+                    val st = try { api.talkStatus(id).also { failures = 0 } } catch (e: ApiException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (++failures >= 8) throw ApiException("OFFLINE", "서버와 연결이 끊겨 대화 정리 결과를 받지 못했어요.")
+                        continue
+                    }
                     when (st.optString("status")) {
                         "done" -> {
                             val r = st.getJSONObject("result")
@@ -1668,6 +1719,7 @@ class MainActivity : Activity() {
                             t.remove("timing")
                             talks.save(t)
                             ui.post {
+                                if (token != talkPollToken || isDestroyed) return@post
                                 talkJobStage = null
                                 talkJobDone = t
                                 val pick = talkPickFor
@@ -1682,7 +1734,7 @@ class MainActivity : Activity() {
                                     autoSong(t)
                                 } else if (active && !recording && !counting) refresh()
                             }
-                            return@execute
+                            return@Thread
                         }
                         "error" -> throw ApiException(st.optString("error_code"), st.optString("error", "대화를 정리하지 못했어요."))
                         else -> {
@@ -1690,20 +1742,22 @@ class MainActivity : Activity() {
                             if (stage != lastStage) {
                                 lastStage = stage
                                 val eta = st.optInt("eta_sec")
-                                ui.post { talkJobStage = stage; talkJobEta = eta; if (active && !recording && !counting) refresh() }
+                                ui.post { if (token == talkPollToken) { talkJobStage = stage; talkJobEta = eta; if (active && !recording && !counting) refresh() } }
                             }
                         }
                     }
                 }
+            } catch (e: InterruptedException) {
+                return@Thread
             } catch (e: Exception) {
-                file.delete()
                 ui.post {
+                    if (token != talkPollToken || isDestroyed) return@post
                     talkJobStage = null
                     talkJobError = e.message ?: "대화를 정리하지 못했어요."
                     if (active && !recording && !counting) refresh()
                 }
             }
-        }
+        }.apply { isDaemon = true; start() }
     }
 
     /** 보관한 대화 하나: 정리 내용 · 방향 바꾸기 · 받아쓴 대화 · 노래 만들기 두 가지(멜로디 골라서 / AI 로 바로) · 지우기. */
@@ -1905,15 +1959,38 @@ class MainActivity : Activity() {
 
     private var library = listOf<JSONObject>()
 
+    /** 서버에 닿지 않을 때 화면 맨 위에 띄울 문장(닿으면 null). 전에는 목록이 비어 '노래 없음'과 구분되지 않았다(44번 #11). */
+    private var serverDown: String? = null
+
     private fun loadLibrary() {
         io.execute {
             try {
                 val a = api.songs(LIBRARY_SIZE).getJSONArray("songs")
                 val list = (0 until a.length()).map { a.getJSONObject(it) }
-                ui.post { library = list; if (onList || (onHome && !recording && !counting)) refresh() }
+                ui.post {
+                    val was = serverDown
+                    library = list; serverDown = null
+                    if (was != null || onList || (onHome && !recording && !counting)) refresh()
+                }
             } catch (e: Exception) {
                 Log.w(tag, "내 노래 목록을 못 받음: ${e.message}")
+                val msg = if (e is ApiException && e.code == "UNAUTHORIZED") e.message ?: "이 서버를 쓸 수 있는 앱이 아니에요."
+                          else "서버에 연결되지 않아요(${api.base}). 서버 PC 가 켜져 있는지, 설정의 서버 주소를 확인해 주세요."
+                ui.post { if (serverDown != msg) { serverDown = msg; if (!recording && !counting) refresh() } }
             }
+        }
+    }
+
+    /** 화면 맨 위 '서버 연결 안 됨' 띠 + 다시 연결. */
+    private fun serverDownBar(): View? = serverDown?.let { msg ->
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = round(SURFACE, 24, RECORDING)
+            setPadding(dp(28), dp(16), dp(16), dp(16))
+            addView(text(msg, BODY_S, RECORDING), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(button("다시 연결", Btn.PRIMARY, Size.MEDIUM) { loadLibrary(); io.execute { loadCatalog() } },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(Size.MEDIUM.height)).apply { marginStart = dp(16) })
         }
     }
 
@@ -4131,7 +4208,7 @@ class MainActivity : Activity() {
         if (path.startsWith(filesDir.absolutePath)) Uri.fromFile(File(path)) else Uri.parse(playUrl(path, tracks))
 
     private fun playUrl(path: String, tracks: Int): String {
-        if (path.startsWith("http://") || path.startsWith("https://")) return path
+        if (path.startsWith("http://") || path.startsWith("https://")) return ChajakApi.withToken(path)
         return api.url(if ("?" in path) path else "$path?v=$tracks")
     }
 

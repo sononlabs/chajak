@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import io
 import json
 import os
@@ -1082,6 +1083,30 @@ async def hum_audio(request):
     return web.FileResponse(found[0], headers={"Content-Type": kind.get(found[0].suffix.lower(), "application/octet-stream")})
 
 
+# 공유 토큰(2026-11-11, 44번 #1): 터널로 밖에 열면 주소만 알면 곡·허밍·대화를 보고 지우고 GPU 를 쓸 수 있었다.
+# 토큰은 CHAJAK_TOKEN 환경변수 → ~/.chajak/token 파일 순으로 읽는다(저장소에 넣지 않는다). 없으면 인증 없이(로컬 개발).
+# 앱은 X-Chajak-Token 헤더로, 차량 미디어 센터처럼 헤더를 못 붙이는 음원·표지 주소는 ?t= 로 보낸다. /health 는 주소 확인용이라 예외.
+def _load_token() -> str:
+    t = os.environ.get("CHAJAK_TOKEN", "").strip()
+    if not t:
+        f = Path(os.environ.get("CHAJAK_TOKEN_FILE", Path.home() / ".chajak" / "token"))
+        t = f.read_text(encoding="utf-8").strip() if f.exists() else ""
+    return t
+
+
+TOKEN = _load_token()
+OPEN_PATHS = {"/health"}
+
+
+@web.middleware
+async def auth(request, handler):
+    if TOKEN and request.path not in OPEN_PATHS:
+        got = request.headers.get("X-Chajak-Token") or request.query.get("t") or ""
+        if not hmac.compare_digest(got.encode(), TOKEN.encode()):
+            return _error_json(401, "UNAUTHORIZED", "이 서버를 쓸 수 있는 앱이 아니에요. 앱을 다시 설치하거나 서버 주소를 확인해 주세요.")
+    return await handler(request)
+
+
 ENGINE_MSG = "생성 엔진에서 문제가 생겼어요. 잠시 후 다시 시도해 주세요."
 # aiohttp 가 직접 내는 오류(라우트 없음·메서드·본문 크기)도 같은 {"error": {code, message}} 형식으로(2026-11-11, 44번 #3)
 HTTP_ERRORS = {400: ("BAD_REQUEST", "요청을 읽지 못했어요."), 404: ("NOT_FOUND", "찾는 주소가 없어요."),
@@ -1170,7 +1195,7 @@ async def _save_jobs_forever(app):
 
 
 def make_app(comfy_url: str) -> web.Application:
-    app = web.Application(middlewares=[errors], client_max_size=MAX_UPLOAD + 1024 * 1024)
+    app = web.Application(middlewares=[errors, auth], client_max_size=MAX_UPLOAD + 1024 * 1024)
     app["store"] = Store(STORAGE)
     app["comfy"] = C.Comfy(comfy_url)
     app["jobs"] = _load_jobs()
@@ -1246,4 +1271,5 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8790)
     ap.add_argument("--comfy", default="http://127.0.0.1:8188")
     a = ap.parse_args()
+    print("인증: " + ("공유 토큰 사용(X-Chajak-Token)" if TOKEN else "꺼짐(토큰 없음 — 로컬 개발용)"), flush=True)
     web.run_app(make_app(a.comfy), host=a.host, port=a.port)
