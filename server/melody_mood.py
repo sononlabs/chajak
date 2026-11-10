@@ -201,6 +201,37 @@ def style_for(mood: dict | None, theme: str = "") -> dict:
     genre, voice, light = STYLES[mood["label"]]
     return {"genre": "" if user_genre(theme) else genre, "tempo": tempo_tag(mood), "voice": voice, "light": light}
 
+# 장면에 시간대·날씨·빛이 이미 있으면 멜로디의 표지 빛을 붙이지 않는다(2026-11-10: 포근한 멜로디의 "노을빛"이 밤 장면에도 붙어
+# 비 오는 밤 도심 표지까지 모두 주황 노을색이 됐다)
+_SCENE_TIME = re.compile(r"\b(?:night|nighttime|midnight|evening|dusk|twilight|dawn|daybreak|sunrise|sunset|morning|noon|midday|afternoon|daylight|"
+                         r"golden\s+hour|blue\s+hour|moon\w*|stars?|starry|rising\s+sun|setting\s+sun)\b", re.I)
+_SCENE_WEATHER = re.compile(r"\b(?:rain\w*|drizzle|snow\w*|fog\w*|mist\w*|haz[ey]\w*|storm\w*|overcast|cloudy|thunder\w*)\b", re.I)
+
+
+# 주제(한국어)에 있는 시간대·날씨 → 장면에 붙일 영어. 가사 모델이 장면 설명에서 "밤"을 빠뜨려 밤 주제가 낮 그림이 됐다(2026-11-10).
+_THEME_TIME = [(re.compile(p), en) for p, en in (
+    (r"새벽|동틀|해 ?뜨|일출", "at dawn"), (r"아침|출근", "in the morning"), (r"낮|오후|점심|한낮", "in daylight"),
+    (r"저녁|노을|해 ?질|해질녘|일몰|석양", "at sunset"), (r"밤|야근|자정|심야|야경|별빛|달빛", "at night"))]
+_THEME_WEATHER = [(re.compile(p), en) for p, en in ((r"비 ?(오|내|맞)|빗|장마|소나기", "in the rain"), (r"눈 ?(오|내)|눈길|폭설|함박눈", "in the snow"), (r"안개", "in the fog"))]
+
+
+def cover_scene(scene: str, mood: dict | None, theme: str = "") -> str:
+    """표지 장면 + 시간대·날씨·빛. 장면에 없는 시간대·날씨는 주제(한국어)에서 가져오고,
+    장면·주제 어디에도 시간대·날씨가 없을 때만 멜로디 분위기의 빛을 붙인다."""
+    if not scene:
+        return scene
+    has_time, has_weather = bool(_SCENE_TIME.search(scene)), bool(_SCENE_WEATHER.search(scene))
+    add = []
+    if not has_time:
+        add += [en for rx, en in _THEME_TIME if rx.search(theme or "")][-1:]
+    if not has_weather:
+        add += [en for rx, en in _THEME_WEATHER if rx.search(theme or "")][:1]
+    if add:
+        return f"{scene}, {' '.join(add)}"
+    light = style_for(mood)["light"]
+    return f"{scene}, {light}" if light and not (has_time or has_weather) else scene
+
+
 
 def merge_style(llm_tags: str, mood: dict | None, theme: str = "", limit: int = 10, vocal: bool = True) -> str:
     """스타일 태그 = [성격 장르·악기] + [템포] + [창법] + [LLM 분위기 태그]. 겹치는 태그는 한 번만, 앞에서부터 limit 개."""

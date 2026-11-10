@@ -707,8 +707,7 @@ async def _run_final_now(app, job: dict, song: dict):
             words = await lyrics.write(job["prompt"], lyr_plan, seed, mood, T.talk_lines(opts.get("talk")), rap=rap)
             # 새로 쓴 가사일 때만 스타일·표지를 멜로디 느낌에 맞춘다(가사·스타일을 지킨 다시 만들기는 그대로)
             words["style"] = melody_mood.merge_style(words["style"], mood, job["prompt"], vocal=sung)
-            if mood and words["cover"]:
-                words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
+            words["cover"] = melody_mood.cover_scene(words["cover"], mood, job["prompt"])
         if rap:  # 모델이 붙인 R&B·Lo-fi 같은 태그가 힙합 느낌을 흐려서(2026-11-10) 랩 태그만 쓴다
             words["style"] = lyrics.RAP_STYLE
             words["sections"] = lyrics.rap_clean(words["sections"])
@@ -895,8 +894,7 @@ async def write_lyrics(request):
         words["style"], words["sections"] = lyrics.RAP_STYLE, lyrics.rap_clean(words["sections"])
     else:
         words["style"] = melody_mood.merge_style(words["style"], mood, prompt, vocal=True)
-    if mood and words["cover"]:
-        words["cover"] = f"{words['cover']}, {melody_mood.style_for(mood)['light']}"
+    words["cover"] = melody_mood.cover_scene(words["cover"], mood, prompt)
     lines = {}
     for sec in plan["sections"]:
         if sec.get("sung") and sec["name"] not in lines:
