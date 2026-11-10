@@ -533,6 +533,14 @@ VOICES = {"auto": "", "female": "female vocal", "male": "male vocal", "none": ""
 COVER_NO_TEXT = ("a wordless picture: absolutely no text, no letters, no words, no numbers, no captions, no title, "
                  "no typography, no signs, no signboards, no logo, no watermark, no writing of any language")
 
+# 가사 모델이나 사용자가 쓴 장면에 간판류가 있으면 Z-Image 가 글자 같은 무늬를 그린다(2026-11-10 네온 거리 표지) → 빛으로 바꾼다
+_COVER_SIGNS = re.compile(r"\b(?:neon\s+|shop\s+|street\s+|glowing\s+|illuminated\s+)?(?:signs?|signboards?|signage|billboards?|storefronts?|shopfronts?|"
+                          r"posters?|banners?|license\s+plates?|menus?|books?|newspapers?|screens?|monitors?)\b", re.I)
+
+
+def _cover_scene(scene: str) -> str:
+    return re.sub(r"\s{2,}", " ", _COVER_SIGNS.sub("soft lights", scene)).strip()
+
 
 REFERENCE_FROM = 33
 KEEP_FROM = 70
@@ -719,7 +727,7 @@ async def _run_final_now(app, job: dict, song: dict):
         else:
             # 제목·한글을 넣으면 그림에 깨진 글자가 그려졌다(2026-11-05 첫 시험) → 가사 모델이 쓴 영어 장면 설명만 쓰고,
             # 글자 금지 지시는 사용자에게 보이지 않게 앞뒤로 붙인다(사용자 요청).
-            scene = words["cover"] or "a quiet road at night seen through a car windshield"
+            scene = _cover_scene(words["cover"] or "") or "a quiet road at night seen through a car windshield"
             cover_prompt = f"{COVER_NO_TEXT}. {scene}. album cover art, square composition, cinematic soft light, painterly illustration. {COVER_NO_TEXT}"
             out = await cf.run(C.cover_graph(cover_prompt, seed, f"chajak_server/{song['id']}_cover"))
             (d / cover_file).write_bytes(await cf.fetch_image(out, "save"))
