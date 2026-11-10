@@ -41,6 +41,9 @@ class ChajakApi(val base: String) {
 
     fun job(id: String): JSONObject = request("GET", "/v1/jobs/$id", null, 10_000)
 
+    /** 노래 만들기 취소(대기 중이면 빼고, 만드는 중이면 멈춘다). */
+    fun cancelJob(id: String): JSONObject = request("POST", "/v1/jobs/$id/cancel", null, 15_000)
+
     fun song(id: String): JSONObject = request("GET", "/v1/songs/$id", null)
 
     fun songs(limit: Int): JSONObject = request("GET", "/v1/songs?limit=$limit", null)

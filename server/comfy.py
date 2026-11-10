@@ -42,6 +42,7 @@ NO_VOICE_HINTS = ("음성 구간을 찾지 못",)
 
 DOWN_WAIT = 300  # ComfyUI 재시작(모델 다시 올리기 포함)을 기다리는 최대 시간(초)
 FREE_WAIT = 3  # /free 가 처리될 틈(초)
+GEN_HEADROOM_DB = -6  # 노래 저장 전 음량(dB)
 MAX_WAIT = 1500  # 작업 하나를 기다리는 최대 시간(초). 넘으면 ComfyUI 에서 지우고 실패로(전에는 영원히 기다려 노래 대기열 전체가 멈출 수 있었다)
 
 
@@ -135,7 +136,11 @@ class Comfy:
             if "prompt_id" not in j:
                 raise ComfyError(f"ComfyUI 가 요청을 거부했습니다: {j.get('error', j)}")
             pid = j["prompt_id"]
-            item = await self._wait(pid, poll, max_wait)
+            try:
+                item = await self._wait(pid, poll, max_wait)
+            except asyncio.CancelledError:  # 노래 만들기 취소 — 엔진에서 돌던 작업도 멈춘다
+                await self._cancel(pid)
+                raise
             if item is not None:
                 break
             if attempt == retries:
@@ -388,7 +393,9 @@ def final_graph(abc: str, style: str, lyrics: str, seed: int, seconds: float, pr
         "ks": {"class_type": "KSampler", "inputs": {"model": ["ckpt", 0], "seed": seed, "steps": 32, "cfg": 1.0, "sampler_name": "dpm_2", "scheduler": "sgm_uniform",
                                                   "positive": ["yue", 0], "negative": ["neg", 0], "latent_image": ["lat", 0], "denoise": 1.0}},
         "dec": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["ks", 0], "vae": ["ckpt", 2]}},
-        "save": {"class_type": "SaveAudioAdvanced", "inputs": {"audio": ["dec", 0], "filename_prefix": prefix, "format": "flac"}},
+        # 저장 전에 음량을 낮춰 둔다 — 디코더 출력이 1.0 을 넘어 FLAC 로 저장될 때 잘려 지지직거렸다(2026-11-11). 서버가 -1dBFS 로 다시 맞춘다(mastering)
+        "vol": {"class_type": "AudioAdjustVolume", "inputs": {"audio": ["dec", 0], "volume": GEN_HEADROOM_DB}},
+        "save": {"class_type": "SaveAudioAdvanced", "inputs": {"audio": ["vol", 0], "filename_prefix": prefix, "format": "flac"}},
     }
 
 

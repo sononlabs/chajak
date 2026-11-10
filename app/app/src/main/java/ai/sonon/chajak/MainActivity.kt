@@ -2397,6 +2397,30 @@ class MainActivity : Activity() {
     private fun saveQueue() = prefs.edit().putString(QUEUED_JOBS, org.json.JSONArray(queuedJobs).toString()).apply()
 
     /** 앞 작업이 끝나면 다음 대기 작업의 진행을 이어서 본다(서버는 이미 차례대로 만들고 있다). */
+    /** 만들고 있는 노래 취소 → 대기열의 다음 노래를 시작한다. */
+    private fun cancelFinal(jobId: String) {
+        io.execute {
+            val msg = try {
+                api.cancelJob(jobId); "노래 만들기를 취소했어요."
+            } catch (e: ApiException) {
+                if (e.code == "ALREADY_FINISHED") null else e.message ?: "취소하지 못했어요."
+            } catch (e: Exception) {
+                "서버와 연결이 끊겨 취소하지 못했어요."
+            }
+            ui.post {
+                if (msg == null) { resumeFinalJob(); return@post }  // 그새 끝났으면 결과를 받아 온다
+                if (msg.startsWith("노래 만들기를 취소")) {
+                    finalPollToken++
+                    finalPollThread?.interrupt()
+                    rememberFinalJob(null)
+                    startNextQueued()
+                }
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+                if (active && !recording && !counting) refresh()
+            }
+        }
+    }
+
     private fun startNextQueued() {
         val next = queuedJobs.removeFirstOrNull() ?: return
         saveQueue()
@@ -2434,6 +2458,16 @@ class MainActivity : Activity() {
                                         android.widget.Toast.makeText(this, "노래가 완성됐어요. 내 노래에서 확인하세요.", android.widget.Toast.LENGTH_LONG).show()
                                     }
                                     loadLibrary()
+                                }
+                            }
+                            return@Thread
+                        }
+                        "cancelled" -> {  // 다른 곳에서 취소된 경우
+                            ui.post {
+                                if (token == finalPollToken && !isDestroyed) {
+                                    rememberFinalJob(null)
+                                    startNextQueued()
+                                    if (active && !recording && !counting) refresh()
                                 }
                             }
                             return@Thread
@@ -2534,10 +2568,17 @@ class MainActivity : Activity() {
         box.addView(finalPendingBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(16) })
         finalElapsed = text("", BODY_S, TEXT3).withMargin(top = 8)
         box.addView(finalElapsed)
-        box.addView(button("작업 상태 다시 확인", size = Size.MEDIUM) {
-            resumeFinalJob()
-            android.widget.Toast.makeText(this, "생성 상태를 확인하고 있어요.", android.widget.Toast.LENGTH_SHORT).show()
-        }.withMargin(top = 12))
+        val cancelKey = "cancel:" + j.optString("id")
+        box.addView(row(
+            button("작업 상태 다시 확인", size = Size.MEDIUM) {
+                resumeFinalJob()
+                android.widget.Toast.makeText(this, "생성 상태를 확인하고 있어요.", android.widget.Toast.LENGTH_SHORT).show()
+            }.withMargin(end = 16),
+            // 중도 취소(2026-11-11 사용자): 두 번 눌러 확인 — 만들던 노래는 남지 않는다
+            button(if (deleteArmed == cancelKey) "한 번 더 누르면 취소해요" else "만들기 취소", size = Size.MEDIUM) {
+                if (deleteArmed != cancelKey) { deleteArmed = cancelKey; refresh(); return@button }
+                deleteArmed = null; cancelFinal(j.optString("id"))
+            }).withMargin(top = 12))
         updateFinalPending(j)
         return box.withMargin(bottom = 16, fill = true)
     }

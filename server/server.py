@@ -28,6 +28,7 @@ from aiohttp import web
 
 import comfy as C
 import fine_melody
+import mastering
 import lyrics
 import melody_ai
 import melody_mood
@@ -218,7 +219,7 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
                         melody: str, accompaniment: bool, song: dict | None, music: bool = False) -> tuple[dict, bytes]:
     """song 이 있으면 쌓기 트랙: 먼저 악보만 뽑아 부른 템포·조성을 보고 곡 박자·조성에 맞춰 연주한다."""
     cf: C.Comfy = app["comfy"]
-    if instrument not in app["instruments"]:
+    if app["instruments"] and instrument not in app["instruments"]:
         raise ApiError(400, "BAD_OPTION", "instrument 는 /v1/instruments 목록의 값이어야 해요.")
     t0 = time.perf_counter()
     ext = Path(filename).suffix.lower() or ".wav"
@@ -422,7 +423,7 @@ def _comfy_dir() -> Path | None:
 
 def _busy(app, song_id: str, final_id: str | None = None) -> bool:
     """이 곡(또는 이 버전을 바탕으로)으로 노래를 만드는 중인가."""
-    return any(j.get("song_id") == song_id and j.get("status") not in ("done", "failed", "error")
+    return any(j.get("song_id") == song_id and j.get("status") not in ("done", "failed", "error", "cancelled")
                and (final_id is None or j.get("from") == final_id) for j in app["jobs"].values())
 
 
@@ -721,8 +722,8 @@ async def start_final(request):
            "options": opts, "from": base["id"] if base else None, "eta_sec": FINAL_ETA(opts["seconds"]), "created": time.time(),
            "_remix": remix}
     request.app["jobs"][job_id] = job
-    _spawn(request.app, (_run_final(request.app, job, song)))
-    return web.json_response({k: v for k, v in job.items() if k != "_remix"}, status=202)
+    job["_task"] = _spawn(request.app, (_run_final(request.app, job, song)))
+    return web.json_response({k: v for k, v in job.items() if not k.startswith("_")}, status=202)
 
 
 def _talk_theme(body: dict) -> str:
@@ -772,8 +773,14 @@ async def _run_final(app, job: dict, song: dict):
             job["created"] = time.time()  # 진행 막대·남은 시간은 실제로 시작한 때부터
             job["stage"] = "melody"
             await _run_final_now(app, job, song)
+    except asyncio.CancelledError:
+        cover = job.get("_cover")
+        if cover:
+            Path(cover).unlink(missing_ok=True)
+            job.pop("cover_url", None)
+        print(f"노래 작업 {job['id']} 취소됨", flush=True)
     except Exception as e:
-        if job.get("status") not in ("done", "failed"):
+        if job.get("status") not in ("done", "failed", "cancelled"):
             job.update(status="failed", error=_fail_message(e, "노래를 만들지 못했어요."))
     finally:
         if job["id"] in waiting:
@@ -872,7 +879,13 @@ async def _run_final_now(app, job: dict, song: dict):
         job["stage"] = "music"
         out = await cf.run(C.final_graph(abc if w["use_abc"] else "", style, text, seed, plan["seconds"] + 8,
                                          f"chajak_server/{song['id']}_final", w["temperature"], w["cfg_scale"]))
-        (d / audio_file).write_bytes(await cf.fetch_audio(out, "save"))
+        raw = await cf.fetch_audio(out, "save")
+        try:  # 앞 25ms 페이드 인 · 끝 페이드 아웃 · 최대 음량 -1dBFS(처음 지지직·잘림 방지, 2026-11-11)
+            raw, mst = await asyncio.get_running_loop().run_in_executor(None, mastering.master, raw)
+            job["mastering"] = mst
+        except Exception as e:
+            print("다듬기 실패(원본 저장):", e, flush=True)
+        (d / audio_file).write_bytes(raw)
         # 곡을 다시 읽어 버전을 붙인다 — 만드는 동안 쌓은 트랙을 지우지 않게, 잠근 채로
         async with store.lock(song["id"]):
             fresh = store.load(song["id"])
@@ -1062,6 +1075,22 @@ async def get_job(request):
     return web.json_response({k: v for k, v in job.items() if not k.startswith("_")}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
 
+async def cancel_job(request):
+    """노래 만들기 취소. 대기열에 있으면 빼고, 만드는 중이면 멈춘다(작사 모델·ComfyUI 작업도 멈춤). 이미 끝났으면 409."""
+    job = request.app["jobs"].get(request.match_info["job_id"])
+    if job is None:
+        raise ApiError(404, "NOT_FOUND", "작업을 찾을 수 없어요.")
+    if job.get("status") in ("done", "failed", "cancelled", "error"):
+        raise ApiError(409, "ALREADY_FINISHED", "이미 끝난 작업이에요.")
+    if job.get("kind") != "final" or not job.get("_task"):
+        raise ApiError(400, "NOT_CANCELLABLE", "이 작업은 취소할 수 없어요.")
+    job.update(status="cancelled", stage="cancelled", error="취소했어요.")
+    job.pop("queue_ahead", None)
+    job["_task"].cancel()   # 대기 중이면 대기열에서, 만드는 중이면 그 자리에서 멈춘다(final_lock 은 저절로 풀린다)
+    _save_jobs(request.app["jobs"])
+    return web.json_response({k: v for k, v in job.items() if not k.startswith("_")}, dumps=lambda o: json.dumps(o, ensure_ascii=False))
+
+
 async def job_cover(request):
     """만드는 중인 노래의 표지(그려지는 대로 먼저 보여 준다)."""
     job = request.app["jobs"].get(request.match_info["job_id"])
@@ -1207,29 +1236,38 @@ def make_app(comfy_url: str) -> web.Application:
     async def on_start(app):
         await app["comfy"].start()
         app["job_saver"] = asyncio.create_task(_save_jobs_forever(app))
-        # ComfyUI 를 함께 다시 켜면 모델 목록을 읽는 데 시간이 걸린다 — 2분까지 기다린다
-        for _ in range(60):
+        # 엔진(ComfyUI)이 늦게 켜져도 서버는 먼저 켠다(44번: 엔진이 꺼져 있으면 서버가 아예 시작되지 않았다).
+        # 악기 목록은 뒤에서 받아 온다 — 그 전까지 /health 는 503, 트랙 만들기는 악기 확인을 건너뛴다.
+        app["instruments"] = []
+        app["extra_nodes"] = []
+        app["engine_watch"] = asyncio.create_task(_engine_info_forever(app))
+
+    async def on_stop(app):
+        app["engine_watch"].cancel()
+        app["job_saver"].cancel()
+        _save_jobs(app["jobs"])
+        await app["comfy"].close()
+
+    async def _engine_info_forever(app):
+        while not app["instruments"]:
             try:
                 app["instruments"] = await app["comfy"].instruments()
-                break
-            except aiohttp.ClientConnectionError:
-                await asyncio.sleep(2)
-        else:
-            app["instruments"] = await app["comfy"].instruments()
-        try:
-            app["extra_nodes"] = await app["comfy"].extra_custom_nodes()
-        except Exception as e:
-            app["extra_nodes"] = []
-            print("커스텀 노드 목록을 읽지 못함:", e, flush=True)
+            except Exception:
+                await asyncio.sleep(5)
+                continue
+            try:
+                app["extra_nodes"] = await app["comfy"].extra_custom_nodes()
+            except Exception as e:
+                print("커스텀 노드 목록을 읽지 못함:", e, flush=True)
+            print(f"생성 엔진 연결됨: 악기 {len(app['instruments'])}종", flush=True)
+            _warn_extra_nodes(app)
+
+    def _warn_extra_nodes(app):
         if app["extra_nodes"]:
             print(f"경고: ComfyUI 에 차작 노드 말고 커스텀 노드 {len(app['extra_nodes'])}개가 올라와 있습니다"
                   f"({', '.join(app['extra_nodes'][:5])} 등). 모델을 VRAM 에 붙잡아 노래가 몹시 느려질 수 있으니 "
                   "--disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument 로 다시 켜세요.", flush=True)
 
-    async def on_stop(app):
-        app["job_saver"].cancel()
-        _save_jobs(app["jobs"])
-        await app["comfy"].close()
 
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)
@@ -1251,6 +1289,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/v1/songs/{song_id}/ai/audio", ai_audio),
         web.get("/v1/jobs/{job_id}", get_job),
         web.get("/v1/jobs/{job_id}/cover", job_cover),
+        web.post("/v1/jobs/{job_id}/cancel", cancel_job),
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/hum", hum_audio),
         web.get("/v1/themes", themes),
         web.post("/v1/talk", talk_upload),
