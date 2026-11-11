@@ -17,4 +17,9 @@ copy() {  # copy <원본> <대상> <제외…>
 copy "$APP" "$here/app" build .gradle .kotlin local.properties '*.iml' .idea .probe
 copy "$SERVER" "$here/server" storage test_output __pycache__ '*.pyc' '*.log'
 copy "$NODE" "$here/comfyui-node/pleos_melody_instrument" __pycache__ '*.pyc'
+# 작업 폴더의 APK 에는 서버 토큰(~/.chajak/token)이 들어 있다 — 기본으로는 저장소의 APK 를 그대로 둔다(2026-11-11).
+# 최종 APK 를 넣을 때만 TAKE_APK=1 bash sync.sh
+if [ "${TAKE_APK:-0}" != 1 ]; then
+  git -C "$here" checkout -- app/apk && git -C "$here" clean -fq -- app/apk
+fi
 echo "동기화 끝: app · server · comfyui-node"
