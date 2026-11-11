@@ -1132,6 +1132,28 @@ def _load_token() -> str:
 
 TOKEN = _load_token()
 OPEN_PATHS = {"/health"}
+# 접속 기록(2026-11-11 협업자: 서버에 요청이 오는지 로그로 보고 싶다). 진행 조회(2~4초마다)는 성공이면 남기지 않는다.
+# 주소의 ?t=(토큰)는 찍지 않도록 경로만 남긴다.
+QUIET_OK = ("/v1/jobs/", "/v1/talk/", "/health")
+
+
+@web.middleware
+async def access_log(request, handler):
+    t0 = time.perf_counter()
+    status = 500
+    try:
+        resp = await handler(request)
+        status = resp.status
+        return resp
+    except web.HTTPException as e:
+        status = e.status
+        raise
+    finally:
+        if not (status < 400 and request.method == "GET" and request.path.startswith(QUIET_OK)):
+            who = request.headers.get("CF-Connecting-IP") or request.remote or "-"
+            note = " (토큰 없음/틀림)" if status == 401 else ""
+            print(f"{time.strftime('%H:%M:%S')} {who} {request.method} {request.path} → {status}{note} "
+                  f"{(time.perf_counter() - t0) * 1000:.0f}ms", flush=True)
 
 
 @web.middleware
@@ -1231,7 +1253,7 @@ async def _save_jobs_forever(app):
 
 
 def make_app(comfy_url: str) -> web.Application:
-    app = web.Application(middlewares=[errors, auth], client_max_size=MAX_UPLOAD + 1024 * 1024)
+    app = web.Application(middlewares=[access_log, errors, auth], client_max_size=MAX_UPLOAD + 1024 * 1024)
     app["store"] = Store(STORAGE)
     app["comfy"] = C.Comfy(comfy_url)
     app["jobs"] = _load_jobs()
