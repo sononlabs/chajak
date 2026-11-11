@@ -1353,7 +1353,7 @@ class MainActivity : Activity() {
             addView(body("${songName(s, "내 멜로디")} · 템포 ${s.optInt("tempo")} · ${keyOf(s)} → 2분 노래(가사·앨범 표지)"))
             if (job != null || finalSubmitting) {
                 // 만드는 동안엔 설정 칸을 감추고 진행만 크게(다른 화면을 봐도·주행을 시작해도 계속)
-                addView(label("만드는 중 · 주제: $prompt"))
+                addView(label("만드는 중 · 주제: ${prompt.ifEmpty { "AI 가 고르는 중" }}"))
                 autoPickNote?.let { addView(caption(it, POSITIVE).withMargin(bottom = 8)) }
                 if (job != null) addView(finalPendingRow(job)) else addView(body("서버에 보내는 중이에요…"))
                 return@show
@@ -1512,6 +1512,18 @@ class MainActivity : Activity() {
             val dirs = TALK_DIRECTIONS.keys.toList()
             addView(segmented(dirs, dirs.indexOf(talkDirection).coerceAtLeast(0), width = 1176) { talkDirection = dirs[it]; showTalkIntro(notice) })
             addView(caption(TALK_DIRECTIONS[talkDirection] + " 방향은 나중에 바꿀 수 있어요.", TEXT3))
+            // 말로 부탁하기(2026-11-11 사용자): 녹음을 켜고 짧게 말하면 정리 없이 바로 노래를 만든다. 예시는 눌러서 바로 체험
+            addView(label("말로 부탁해도 돼요"))
+            addView(caption("녹음을 켜고 아래처럼 짧게 말하면 바로 노래를 만들어요. 예시를 누르면 말하지 않고 바로 만들어 볼 수 있어요.", TEXT3))
+            addView(android.widget.HorizontalScrollView(this@MainActivity).apply { isHorizontalScrollBarEnabled = false; addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                REQUEST_EXAMPLES.forEach { ex ->
+                    addView(button("“${ex[0]}”", Btn.PRIMARY, Size.MEDIUM) {
+                        requestSong(JSONObject().put("text", ex[0]).put("theme", ex[1]).put("energy", ex[2].toIntOrNull() ?: JSONObject.NULL)
+                            .put("voice", ex[3].ifEmpty { null } ?: JSONObject.NULL))
+                    }.withMargin(end = 12))
+                }
+            }) }.withMargin(top = 12, fill = true))
         }, { showTalkIntro(notice) }, tabs = true) {
             aboveButton(notice, TEXT) {
                 zones(button("← 대화 보관함") { showTalks() },
@@ -1566,6 +1578,7 @@ class MainActivity : Activity() {
         show({
             addView(headline("대화 녹음 중"))
             addView(body("평소처럼 이야기하세요. 다른 화면을 봐도 계속 녹음해요. 다 이야기했으면 가운데 버튼을 누르세요."))
+            addView(caption("“비 오는 날 신나는 노래 만들어 줘”처럼 짧게 부탁하고 녹음 완료를 누르면 바로 노래를 만들어요.", TEXT3))
             talkOrb = VoiceOrb(this@MainActivity).also {
                 it.color = ACTIVE
                 it.calm = driving
@@ -1714,6 +1727,15 @@ class MainActivity : Activity() {
                     when (st.optString("status")) {
                         "done" -> {
                             val r = st.getJSONObject("result")
+                            // 짧은 부탁("○○ 노래 만들어 줘")이면 보관함에 넣지 않고 바로 노래로(2026-11-11 사용자)
+                            r.optJSONObject("request")?.let { ask ->
+                                ui.post {
+                                    if (token != talkPollToken || isDestroyed) return@post
+                                    talkJobStage = null
+                                    requestSong(ask)
+                                }
+                                return@Thread
+                            }
                             val t = JSONObject(r.toString()).put("id", java.util.UUID.randomUUID().toString().take(12))
                                 .put("created", System.currentTimeMillis()).put("songs", org.json.JSONArray())
                             t.remove("timing")
@@ -1948,6 +1970,42 @@ class MainActivity : Activity() {
         val m = pick.getJSONObject("mood")
         autoPickNote = "대화 분위기(${t.optString("direction")} · ${feeling.ifEmpty { "-" }})에 맞춰 ‘${songName(pick)}’(${m.optString("label")} · 에너지 ${m.optInt("energy")}) 멜로디를 골랐어요."
         useTalkWith(t, pick.getString("id"), preview = false)
+    }
+
+    /**
+     * 말로 부탁한 노래(2026-11-11 사용자: "그냥 어떤 음악 만들어줘" 하면 만들어 주기). ask = {text, theme, energy|null, voice|null}
+     * (서버 talk.as_request 결과 또는 예시 버튼). 내 멜로디 중 에너지가 가까운 것 셋 가운데 하나를 고르고(부탁에 빠르기 말이 없으면
+     * 아무거나 — 같은 멜로디만 계속 나오지 않게), 주제가 비면 서버가 주제를 고른다. 대화 내용은 넣지 않는다.
+     */
+    private fun requestSong(ask: JSONObject) {
+        val said = ask.optString("text")
+        val candidates = library.filter { it.optJSONObject("mood") != null }
+        if (candidates.isEmpty()) return showTalkIntro("“$said” — 노래를 만들려면 멜로디가 하나 있어야 해요. 녹음실에서 한 소절 흥얼거린 뒤 다시 부탁해 주세요.")
+        if (finalSubmitting || recording || counting || TalkRecordService.recording) return
+        val energy = if (ask.isNull("energy")) null else ask.optInt("energy")
+        val pick = (if (energy == null) candidates.shuffled() else candidates.sortedBy { Math.abs(it.getJSONObject("mood").optInt("energy") - energy) }.take(3).shuffled()).first()
+        val theme = ask.optString("theme")
+        val voice = if (ask.isNull("voice")) "" else ask.optString("voice")
+        val m = pick.getJSONObject("mood")
+        stopPlayback()
+        io.execute {
+            try {
+                val s = api.song(pick.getString("id"))
+                ui.post {
+                    if (isDestroyed) return@post
+                    song = s; stackMode = null; playerVersion = null
+                    talkResult = null; talkFor = null
+                    prompt = theme; themeFromDrive = false; promptFor = s.optString("id"); saveDraft()
+                    createFinal(extra = voice.takeIf { it.isNotEmpty() }?.let { JSONObject().put("voice", it) })
+                    // createFinal 이 대화가 없으면 안내를 지우므로 그 뒤에 쓴다
+                    autoPickNote = "“$said” — ‘${songName(pick)}’(${m.optString("label")}) 멜로디로 만들어요." +
+                                   (if (theme.isEmpty()) " 주제는 AI 가 골라요." else "")
+                    if (active && !recording && !counting) refresh()
+                }
+            } catch (e: Exception) {
+                ui.post { showError(e.message ?: "멜로디를 열지 못했어요.") }
+            }
+        }
     }
 
     /** 주제가 오늘 드라이브에서 자동으로 왔는지(안내 문구용). 사용자가 고치거나 🎲 를 누르면 false. */
@@ -4647,7 +4705,18 @@ class MainActivity : Activity() {
         const val REQ_DRILL = 2
         const val REQ_VOICE = 3
         const val REQ_TALK = 7
-        const val TALK_MIN_SEC = 5
+        // 짧은 부탁("노래 만들어 줘")도 받으려고 5초 → 2초(2026-11-11). 말이 거의 없으면 서버가 TALK_EMPTY 로 돌려준다
+        const val TALK_MIN_SEC = 2
+        /**
+         * 말로 노래 부탁하기 예시(2026-11-11 사용자: 무엇을 만들지 모르는 사람도 바로 체험하게). 서버 talk.as_request 가 같은 말에서
+         * 뽑는 값과 같게 둔다: 말할 문장, 주제(빈 값 = 서버가 고름), 에너지(멜로디 고르기), 목소리.
+         */
+        val REQUEST_EXAMPLES = listOf(
+            listOf("그냥 아무 노래나 만들어 줘", "", "", ""),
+            listOf("비 오는 날 신나는 노래 만들어 줘", "비 오는 날 신나는", "75", ""),
+            listOf("퇴근길에 들을 잔잔한 노래 만들어 줘", "퇴근길에 들을 잔잔한", "30", ""),
+            listOf("오늘 드라이브 이야기로 랩 만들어 줘", "오늘 드라이브 이야기", "75", "rap_male"),
+        )
         /** 대화 녹음 화면 가운데 목소리 원 높이. */
         const val TALK_ORB_H = 420
         /** 대화로 만들 노래의 방향(서버 talk.FEELINGS 와 같은 이름). */

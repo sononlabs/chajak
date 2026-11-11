@@ -218,6 +218,41 @@ async def digest(transcript: str, feeling: str, seed: int = 7, lines: list[str] 
     raise DigestError("대화를 노래 이야기로 정리하지 못했어요.")
 
 
+# ---------------------------------------------------------------- 말로 노래 부탁(2026-11-11 사용자)
+# "그냥 어떤 음악 만들어줘", "비 오는 날 신나는 노래 만들어줘" 처럼 짧게 부탁하면 대화 정리 대신 바로 노래로.
+REQUEST_MAX_SEC = 30
+_ASK = re.compile(r"(만들어|불러|들려|틀어|지어|써|해)\s*(줘|줄래|주세요|줘요|주라|봐|볼래|보자|줄 수|주실|달라)|만들자|만들어\s*볼까|부탁")
+_SONG = re.compile(r"노래|음악|곡|송|멜로디|비지엠|BGM|랩|발라드|연주", re.I)
+_TAIL = re.compile(r"\s*(으로|로)?\s*(된\s*)?(노래|음악|곡|송|멜로디|비지엠|BGM)?\s*(를|을|나|이나|좀|하나|한\s*곡|한\s*개|\s)*"
+                   r"(좀\s*)?(만들|불러|들려|틀어|지어|써|해)\S*(\s+\S*(줘|주세요|볼래|보자|요))?\s*[.!?~]*$", re.I)
+_FILL = re.compile(r"^(차작아|차작|야|자|음+|어+|저기|그냥|아무거나|아무|어떤|무슨|아무런|좀|한번|하나)\s*|\s*(그냥|아무거나|좀|한번|하나|아무)\s*$")
+_FAST = ("신나", "신난", "경쾌", "빠른", "흥겨", "흥나", "댄스", "힙합", "랩", "록", "락", "파티", "통쾌", "시원")
+_SLOW = ("잔잔", "조용", "슬픈", "슬프", "차분", "감성", "발라드", "느린", "우울", "그리운", "포근", "새벽", "잠")
+
+
+def as_request(text: str, seconds: float) -> dict | None:
+    """짧은 녹음이 '노래 만들어 줘' 부탁인지. 맞으면 {theme(빈 문자열이면 서버가 주제를 고른다), energy(0~100|None), voice|None}."""
+    t = " ".join(text.split()).strip(" .!?~")
+    if seconds > REQUEST_MAX_SEC or not t or len(t.replace(" ", "")) > 60:
+        return None
+    if not _ASK.search(t) or not (_SONG.search(t) or re.search(r"만들|지어", t)):
+        return None
+    theme = _TAIL.sub("", t).strip(" ,.")
+    for _ in range(4):
+        theme = _FILL.sub("", theme).strip(" ,.")
+    # 목소리·형식 말은 주제에서 뺀다(목소리 옵션으로 따로 넘긴다)
+    theme = re.sub(r"(여자|여성|남자|남성)\s*(목소리|보컬)?\s*(으로|로)?|가사\s*(없이|없는)|연주곡?|노래\s*없이|악기만", " ", theme)
+    theme = re.sub(r"\s*(으로|로)?\s*(랩|노래|음악|곡)\s*$", "", theme.strip())
+    theme = re.sub(r"(이야기|얘기)(으로|로)$", r"\1", " ".join(theme.split())).strip(" ,.")
+    if len(theme.replace(" ", "")) < 2:
+        theme = ""
+    fast, slow = any(w in t for w in _FAST), any(w in t for w in _SLOW)
+    energy = 75 if fast and not slow else 30 if slow and not fast else None
+    voice = ("rap_male" if "랩" in t else "none" if re.search(r"연주곡|가사\s*없|노래\s*없이|악기만", t) else
+             "female" if re.search(r"여자|여성", t) else "male" if re.search(r"남자|남성", t) else None)
+    return {"text": t, "theme": theme[:60], "energy": energy, "voice": voice}
+
+
 def talk_lines(talk: dict | None) -> str:
     """가사 기획·초안 프롬프트에 넣을 대화 카드(lyrics.write 의 talk)."""
     if not talk:

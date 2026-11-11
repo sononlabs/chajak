@@ -972,6 +972,13 @@ async def _run_talk(app, tid: str, data: bytes, direction: str):
                 raise ApiError(503, "STT_UNAVAILABLE", "받아쓰기 모델이 서버에 아직 없어요. 서버 PC 에서 faster-whisper 모델을 받아 주세요.")
             raise
         del data
+        # 짧게 "○○ 노래 만들어 줘"라고 부탁한 녹음이면 정리 없이 바로 돌려준다 — 앱이 곧장 노래를 만든다(2026-11-11 사용자)
+        ask = T.as_request(heard["text"], heard["seconds"])
+        if ask:
+            job["result"] = {"transcript": heard["text"], "lines": heard["lines"], "seconds": heard["seconds"], "request": ask,
+                             "timing": {"stt_sec": round(time.perf_counter() - t0, 1), "stt_device": heard["device"]}}
+            job.update(status="done", stage="done")
+            return
         if len(heard["text"].replace(" ", "")) < 8:
             raise ApiError(422, "TALK_EMPTY", "말소리가 거의 들리지 않았어요. 마이크 가까이에서 다시 이야기해 주세요.")
         t1 = time.perf_counter()
