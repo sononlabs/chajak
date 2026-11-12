@@ -15,7 +15,8 @@ from .arrange import MAJOR, MINOR, _key
 
 # 이름 → 설명. 노드 드롭다운과 서버 API 가 같은 이름을 쓴다.
 VARIATIONS = {
-    "화음 멜로디": "내 멜로디보다 3도 위에서 함께 부르는 둘째 목소리 (겹치기용)",
+    "화음 멜로디": "마디 화음에 맞춰 내 멜로디 위에서 함께 부르는 둘째 목소리 (겹치기용)",
+    "아래 화음 멜로디": "마디 화음에 맞춰 내 멜로디 아래에서 받쳐 주는 둘째 목소리 (겹치기용)",
     "분위기 바꾸기": "밝은 장조는 쓸쓸한 단조로, 단조는 밝은 장조로",
     "꾸밈 넣기": "음 사이를 잇는 지나가는 음·꾸밈음을 넣어 더 노래처럼",
     "통통 튀게": "긴 음을 8분음표로 쪼개고 셔플 리듬으로",
@@ -49,8 +50,55 @@ def _step(midi: int, steps: int, root: int, scale) -> int:
     return _pitch(index + steps, off, root, scale)
 
 
-def _harmony(notes, root, scale):
-    return [Note(n.start, n.dur, _step(n.midi, 2, root, scale)) for n in notes]
+# 화음 줄(2026-11-12): 멜로디와의 간격(반음) → 감점. 3도·6도가 가장 자연스럽고, 4·5도는 비어 들리며, 증4도·2도 이하는 피한다
+HARMONY_INTERVAL = {3: 0.0, 4: 0.0, 8: 0.25, 9: 0.25, 5: 0.7, 7: 0.7, 6: 2.5}
+HARMONY_NON_CHORD = (1.6, 0.25)  # 마디 화음 밖 음: (긴 음·센박, 짧은 여린박)
+HARMONY_LEAP = 0.15  # 앞 화음 음에서 반음 하나 움직일 때마다(86곡 시험: 0.06→0.15 로 움직임 3.4→2.8반음, 화음 맞음 95% 그대로)
+HARMONY_PARALLEL = 0.8  # 완전5도가 연달아(병행 5도)
+
+
+def _harmony(notes, root, scale, minor=False, key_field="C", bar_beats=4.0, tempo=100.0, below=False):
+    """마디 화음에 맞춘 둘째 목소리. 음마다 음계 안에서 멜로디 위(below=True 면 아래) 3~9반음 후보를 놓고,
+    간격의 자연스러움 + 그 마디 화음에 속하는지(길거나 센박인 음일수록 중요) + 앞 음에서 덜 움직이기로 고른다.
+    화음은 자동 반주와 같은 choose_chords 라서 반주를 켜도 부딪치지 않는다. 멜로디가 음계 밖 음이면 3도 평행."""
+    from .arrange import SLOW_TEMPO, choose_chords
+
+    if not notes:
+        return []
+    per_bar = 2 if tempo < SLOW_TEMPO and bar_beats >= 4 else 1
+    seg = bar_beats / per_bar
+    chords = choose_chords(notes, seg, key_field)
+    scale_pcs = {(root + s) % 12 for s in scale}
+    sign = -1 if below else 1
+    out, prev, prev_iv = [], None, None
+    for n in notes:
+        _, off = _degree(n.midi, root, scale)
+        if off:
+            h = _step(n.midi, 2 * sign, root, scale)
+            out.append(Note(n.start, n.dur, h))
+            prev, prev_iv = h, abs(h - n.midi)
+            continue
+        pcs = chords[min(len(chords) - 1, int(n.start // seg))][0]
+        important = n.dur >= 1.0 or abs(n.start % seg) < 1e-6 or abs(n.start % seg - seg / 2) < 1e-6
+        best = None
+        for iv, cost in HARMONY_INTERVAL.items():
+            h = n.midi + sign * iv
+            if h % 12 not in scale_pcs:
+                continue
+            score = cost + (0.0 if h % 12 in pcs else HARMONY_NON_CHORD[0 if important else 1])
+            if prev is not None:
+                score += HARMONY_LEAP * abs(h - prev)
+                if iv == 7 and prev_iv == 7 and h != prev:
+                    score += HARMONY_PARALLEL
+            if best is None or score < best[0]:
+                best = (score, h, iv)
+        if best is None:
+            h, iv = _step(n.midi, 2 * sign, root, scale), None
+        else:
+            _, h, iv = best
+        out.append(Note(n.start, n.dur, h))
+        prev, prev_iv = h, iv
+    return out
 
 
 def _sequence(notes, root, scale):
@@ -274,8 +322,9 @@ def vary(abc: str, name: str) -> tuple[str, str]:
     scale = MINOR if minor else MAJOR
     key = re.match(r"\s*(\S+)", parsed.key or "C").group(1)
 
-    if name == "화음 멜로디":
-        out = _harmony(notes, root, scale)
+    if name in ("화음 멜로디", "아래 화음 멜로디"):
+        out = _harmony(notes, root, scale, minor, parsed.key, float(parsed.meter[0]), float(parsed.tempo or 100),
+                       below=name == "아래 화음 멜로디")
     elif name == "분위기 바꾸기":
         out = _mood(notes, root, scale, minor)
         key = key[:-1] if minor else key + "m"

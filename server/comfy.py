@@ -24,7 +24,8 @@ BASS_INSTRUMENT = "GM 33 Finger Bass"
 MELODY_FREEDOM = {"그대로": 0.0, "다듬기": 0.5, "AI 편곡": 0.9}
 # 변주 id → (노드 이름, 어울리는 쌓기 방식, 앱에 보여줄 설명). 노드 쪽 목록: melody_variation.VARIATIONS
 VARIATIONS = {
-    "harmony": ("화음 멜로디", "overlay", "내 멜로디보다 3도 위에서 함께 부르는 둘째 목소리"),
+    "harmony": ("화음 멜로디", "overlay", "마디 화음에 맞춰 내 멜로디 위에서 함께 부르는 둘째 목소리"),
+    "harmony_low": ("아래 화음 멜로디", "overlay", "마디 화음에 맞춰 내 멜로디 아래에서 받쳐 주는 둘째 목소리"),
     "mood": ("분위기 바꾸기", "append", "밝은 장조는 쓸쓸한 단조로, 단조는 밝은 장조로"),
     "ornament": ("꾸밈 넣기", "append", "음 사이를 잇는 꾸밈음을 넣어 더 노래처럼"),
     "bounce": ("통통 튀게", "append", "긴 음을 쪼개고 셔플 리듬으로"),

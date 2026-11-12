@@ -114,10 +114,10 @@ cd server
 
 | 필드 | 값 | 기본 |
 |---|---|---|
-| `variation` | `harmony` 화음 멜로디 · `mood` 분위기 바꾸기 · `ornament` 꾸밈 넣기 · `bounce` 통통 튀게 · `inversion` 위아래 뒤집기 · `retrograde` 거꾸로 · `step_up` 한 단계 위로 · `finish` 멜로디 완성하기(음계·박자 맞춤 + 4마디 프레이즈 마침, 4마디 이하면 두 번 불러 8마디) | 필수 |
+| `variation` | `harmony` 화음 멜로디(마디 화음에 맞춘 위 둘째 목소리) · `harmony_low` 아래 화음 멜로디(아래에서 받침) · `mood` 분위기 바꾸기 · `ornament` 꾸밈 넣기 · `bounce` 통통 튀게 · `inversion` 위아래 뒤집기 · `retrograde` 거꾸로 · `step_up` 한 단계 위로 · `finish` 멜로디 완성하기(음계·박자 맞춤 + 4마디 프레이즈 마침, 4마디 이하면 두 번 불러 8마디) | 필수 |
 | `source` | 변주할 트랙 번호 | `1` |
 | `instrument` | `/v1/instruments`의 값 | 원본 트랙 악기 |
-| `mode` | `overlay` · `append` | `harmony`는 겹치기, 나머지는 이어 붙이기 |
+| `mode` | `overlay` · `append` | `harmony`·`harmony_low`는 겹치기, 나머지는 이어 붙이기 |
 | `accompaniment` | 화음+베이스 붙이기 | 이어 붙이기일 때만 `true`. 원본 트랙이 조성 이동됐으면 항상 반주 없음 |
 
 응답 201은 곡 전체(`POST /v1/songs`와 같은 형식). 새 트랙에 `variation`, `source`, `variation_info`(바뀐 음 수·조성)가 붙습니다. 마음에 안 들면 `DELETE /v1/songs/{id}/tracks/{n}`으로 뺍니다.

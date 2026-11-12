@@ -106,7 +106,7 @@ async def main(server: str, ai: bool):
                 check(f"변주 {v['name']}", r.status == 201, f"{time.perf_counter() - t:.1f}s · {tr.get('mode')} · 반주 {tr.get('accompaniment')} · {tr.get('variation_info', j)}")
             async with s.get(f"/v1/songs/{vid}/tracks/{tr.get('n')}/audio") as r:
                 (OUT / f"{vid}_var_{v['id']}.flac").write_bytes(await r.read())
-            if v["id"] not in ("harmony", "step_up"):
+            if v["id"] not in ("harmony", "harmony_low", "step_up"):
                 async with s.delete(f"/v1/songs/{vid}/tracks/{tr.get('n')}") as r:
                     check(f"  빼기", r.status == 200 and len((await r.json())["tracks"]) == tr.get("n", 0) - 1)
         async with s.get(f"/v1/songs/{vid}/audio") as r:

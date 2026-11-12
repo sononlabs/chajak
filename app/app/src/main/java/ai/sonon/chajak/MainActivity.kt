@@ -59,7 +59,7 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * 차작 MVP: 흥얼거리기 → 서버에서 악기 연주 + 자동 반주 → 듣기 → 겹쳐/이어 부르기 · 멜로디 변주로 트랙 쌓기.
+ * 차작 MVP: 흥얼거리기 → 서버에서 악기 연주 + 자동 반주 → 듣기 → 화음 붙이기 · 이어 부르기 · 멜로디 변주로 트랙 쌓기.
  * 화면은 Pleos Connect Design System 라이트 테마(색·글자·버튼 수치는 아래 companion 참고).
  */
 class MainActivity : Activity() {
@@ -100,8 +100,6 @@ class MainActivity : Activity() {
     private var accompaniment = true
     /** null 이면 새 곡, 아니면 쌓기 방식(overlay|append). */
     private var stackMode: String? = null
-    /** 곡 화면 토글에서 고른 쌓기 방식. 녹음 버튼을 누르면 stackMode 가 된다. */
-    private var stackChoice = "overlay"
 
     private var song: JSONObject? = null
     private var playing: String? = null
@@ -1238,7 +1236,15 @@ class MainActivity : Activity() {
                 right.addView(grid(polish.map { v -> button(v.name, Btn.PRIMARY, size = Size.MEDIUM, enabled = idle) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 2))
                 right.addView(caption("멜로디 완성하기: 음계·박자를 맞추고 끝을 닫아요. AI로 살리기: 허밍은 참고만, AI가 더 노래다운 8마디로 새로 써요(약 10초).", TEXT3))
             }
-            right.addView(button(if (showMore) "더 만들기 접기 ▴" else "더 만들기 · 악기 · 겹쳐 부르기 · 변주 ▾", size = Size.MEDIUM) {
+            // 화음 붙이기(2026-11-12): 흥얼거려 겹쳐 부르기는 박자·음정이 어긋나고 스피커 소리가 다시 들어가 잘 안 됐다 →
+            // 음표로 바꾼 멜로디의 마디 화음에 맞춰 둘째 목소리를 만들어 겹친다. 버튼 한 번이라 주행 중에도
+            val harmony = HARMONY.mapNotNull { id -> variations.firstOrNull { it.id == id } }
+            if (harmony.isNotEmpty()) {
+                right.addView(label("화음 붙이기"))
+                right.addView(grid(harmony.map { v -> button(HARMONY_LABEL[v.id] ?: v.name, Btn.PRIMARY, size = Size.MEDIUM, enabled = idle) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 2))
+                right.addView(caption("다시 안 불러도 돼요. 내 멜로디의 화음에 맞춰 둘째 목소리를 겹쳐요. 위는 밝게 함께 부르고, 아래는 받쳐 줘요.", TEXT3))
+            }
+            right.addView(button(if (showMore) "더 만들기 접기 ▴" else "더 만들기 · 악기 · 이어 부르기 · 변주 ▾", size = Size.MEDIUM) {
                 showMore = !showMore; refresh()
             }.withMargin(top = 24))
             if (showMore) right.addView(morePanel(idle, count))
@@ -1289,7 +1295,8 @@ class MainActivity : Activity() {
         createFinal()
     }
 
-    /** 더 만들기(접힘): 다음에 얹을 악기 · 겹쳐/이어 부르기 · 변주 · 마지막 트랙 빼기. 주행 중에는 잠근다(정차해서). */
+    /** 더 만들기(접힘): 다음에 얹을 악기 · 이어 부르기 · 변주 · 마지막 트랙 빼기. 주행 중에는 잠근다(정차해서).
+     *  흥얼거려 겹쳐 부르기는 2026-11-12 뺐다(화음 붙이기로 대신). 서버 overlay 녹음 API 와 예전 곡의 겹친 트랙은 그대로. */
     private fun morePanel(idle: Boolean, count: Int) = column().apply {
         background = round(SURFACE, 24)
         setPadding(dp(28), dp(8), dp(28), dp(24))
@@ -1297,15 +1304,10 @@ class MainActivity : Activity() {
         if (driving) addView(caption("주행 중에는 듣기와 다듬기만 돼요. 정차한 뒤 더 만들어 보세요.", TEXT3))
         addView(label("얹을 악기"))
         addView(grid(INSTRUMENTS.mapIndexed { i, ins -> button(ins.first, if (i == instrument) Btn.SECONDARY else Btn.PRIMARY, Size.MEDIUM) { instrument = i; saveDraft(); refresh() } }, 3))
-        addView(label("한 소절 더 얹기"))
-        addView(row(
-            segmented(listOf("겹쳐 부르기", "이어 부르기"), if (stackChoice == "overlay") 0 else 1, width = STACK_TOGGLE) {
-                stackChoice = if (it == 0) "overlay" else "append"; refresh()
-            },
-            button("흥얼거려 얹기", size = Size.MEDIUM, enabled = ok && canRecord) { stackMode = stackChoice; showHome() },
-        ))
+        addView(label("한 소절 이어 부르기"))
+        addView(button("흥얼거려 뒤에 이어 붙이기", size = Size.MEDIUM, enabled = ok && canRecord) { stackMode = "append"; showHome() })
         addView(label("변주 · 다시 안 불러도 돼요"))
-        addView(grid(variations.filter { it.id !in POLISH }.map { v -> button(v.name, size = Size.MEDIUM, enabled = ok) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 3))
+        addView(grid(variations.filter { it.id !in POLISH && it.id !in HARMONY }.map { v -> button(v.name, size = Size.MEDIUM, enabled = ok) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 3))
         if (count > 1) addView(button("마지막 트랙 빼기", size = Size.MEDIUM, enabled = ok) { deleteLast() }.withMargin(top = 16))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
     }
@@ -4085,6 +4087,7 @@ class MainActivity : Activity() {
         val tracks = s.getJSONArray("tracks")
         startPending(Pending("${tracks.length() + 1}  ${instrumentLabel(tracks.getJSONObject(0).getString("instrument"))} · 변주 · ${v.name}",
                              if (v.id == "rewrite") listOf("허밍 동기 읽는 중…", "AI가 8마디 멜로디 쓰는 중…", "박자·음계 검사하는 중…", "연주하는 중…")
+                             else if (v.id in HARMONY) listOf("마디 화음 읽는 중…", "둘째 목소리 고르는 중…", "연주하는 중…")
                              else listOf("음표 다듬는 중…", "연주하는 중…")))
         call { api.addVariation(s.getString("id"), v.id) }
     }
@@ -4657,13 +4660,14 @@ class MainActivity : Activity() {
         const val ROLL = 560
         /** 녹음 길이 상한. 서버 업로드 상한(20MB)·변환 시간을 넘지 않게. */
         const val MAX_RECORD_SEC = 60
-        /** 곡 화면 아래 줄 겹쳐/이어 토글 폭(아래 줄 오른쪽 칸에 들어가게 줄임 — 프로젝트 선택). */
-        const val STACK_TOGGLE = 440
         /** 만드는 중 단계 문구를 넘기는 간격. 서버 처리 2~4초에 단계 3~5개가 대략 맞게. */
         const val PENDING_STEP_MS = 900L
         const val FINISH = "finish"
         /** "내 멜로디 다듬기"로 따로 보여 줄 변주(나머지는 변주 칸). */
         val POLISH = setOf(FINISH, "rewrite")
+        /** "화음 붙이기"로 따로 보여 줄 변주(위·아래 둘째 목소리, 겹치기). */
+        val HARMONY = listOf("harmony", "harmony_low")
+        val HARMONY_LABEL = mapOf("harmony" to "♪ 위에서 화음", "harmony_low" to "♪ 아래에서 받치기")
         /** 녹음 중 포커스 용도. 차량 포커스 표에서 음성 명령(ASSISTANT)은 음악과 함께 울리지 않아 음악이 잠깐 멈춘다. */
         const val FOCUS_USAGE = AudioAttributes.USAGE_ASSISTANT
         val PLAY_ATTRS: AudioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
@@ -4813,7 +4817,8 @@ class MainActivity : Activity() {
 
         /** 서버 목록을 못 받았을 때 쓰는 기본값(서버 comfy.VARIATIONS 와 같은 순서). */
         val DEFAULT_VARIATIONS = listOf(
-            Variation("harmony", "화음 멜로디", "3도 위 둘째 목소리"), Variation("mood", "분위기 바꾸기", "장조↔단조"),
+            Variation("harmony", "화음 멜로디", "화음에 맞춘 위 둘째 목소리"),
+            Variation("harmony_low", "아래 화음 멜로디", "화음에 맞춘 아래 둘째 목소리"), Variation("mood", "분위기 바꾸기", "장조↔단조"),
             Variation("ornament", "꾸밈 넣기", "꾸밈음 추가"), Variation("bounce", "통통 튀게", "셔플 리듬"),
             Variation("inversion", "위아래 뒤집기", "음 방향 반대로"), Variation("retrograde", "거꾸로", "끝에서부터"),
             Variation("step_up", "한 단계 위로", "음계 한 칸 위에서 다시"),
