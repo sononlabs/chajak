@@ -17,20 +17,12 @@ from .arrange import MAJOR, MINOR, _key
 VARIATIONS = {
     "화음 멜로디": "마디 화음에 맞춰 내 멜로디 위에서 함께 부르는 둘째 목소리 (겹치기용)",
     "아래 화음 멜로디": "마디 화음에 맞춰 내 멜로디 아래에서 받쳐 주는 둘째 목소리 (겹치기용)",
-    "분위기 바꾸기": "밝은 장조는 쓸쓸한 단조로, 단조는 밝은 장조로",
-    "꾸밈 넣기": "음 사이를 잇는 지나가는 음·꾸밈음을 넣어 더 노래처럼",
-    "통통 튀게": "긴 음을 8분음표로 쪼개고 셔플 리듬으로",
-    "위아래 뒤집기": "올라가던 음은 내려가고, 내려가던 음은 올라가게",
-    "거꾸로": "멜로디를 끝에서부터 거꾸로",
-    "한 단계 위로": "같은 멜로디를 음계 한 칸 위에서 다시 (이어 붙이기용)",
     "멜로디 완성하기": "음계·박자를 맞추고 4마디마다 프레이즈를 닫아 한 곡처럼. 짧으면 두 번 부르고 으뜸음으로 끝냄",
 }
 # 완성하기: 프레이즈 끝음 — 중간은 레·솔(반마침), 마지막은 도(온마침)
 HALF_CADENCE = (1, 4)
 FULL_CADENCE = (0,)
 MAX_BARS = 16
-# 장조↔단조를 바꿀 때 조표가 7개를 넘는 조는 같은 소리의 다른 이름으로 적는다
-ENHARMONIC = {"D#": "Eb", "A#": "Bb", "G#": "Ab", "Dbm": "C#m", "Gbm": "F#m", "Abm": "G#m"}
 
 
 def _degree(midi: int, root: int, scale) -> tuple[int, int]:
@@ -99,71 +91,6 @@ def _harmony(notes, root, scale, minor=False, key_field="C", bar_beats=4.0, temp
         out.append(Note(n.start, n.dur, h))
         prev, prev_iv = h, iv
     return out
-
-
-def _sequence(notes, root, scale):
-    return [Note(n.start, n.dur, _step(n.midi, 1, root, scale)) for n in notes]
-
-
-def _mood(notes, root, scale, minor):
-    target = MAJOR if minor else MINOR
-    out = []
-    for n in notes:
-        index, off = _degree(n.midi, root, scale)
-        out.append(Note(n.start, n.dur, _pitch(index, off, root, target)))
-    return out
-
-
-def _ornament(notes, root, scale):
-    """8분음표 이상인 음 뒤에 3도 도약이 오면 사이 음을, 같은 음이 이어지면 윗 꾸밈음을 뒤 절반에 넣는다."""
-    out = []
-    for a, b in zip(notes, notes[1:] + [None]):
-        if b is None or a.dur < 0.5 or b.start - (a.start + a.dur) > 1e-6:
-            out.append(a)
-            continue
-        gap = _degree(b.midi, root, scale)[0] - _degree(a.midi, root, scale)[0]
-        if abs(gap) == 2:
-            mid = _step(a.midi, gap // 2, root, scale)
-        elif gap == 0:
-            mid = _step(a.midi, 1, root, scale)
-        else:
-            out.append(a)
-            continue
-        half = a.dur / 2
-        out += [Note(a.start, half, a.midi), Note(a.start + half, half, mid)]
-    return out
-
-
-def _bounce(notes):
-    """1박 이상 음은 8분음표로 쪼개고, 박 앞 8분 + 뒤 8분 짝은 점8분 + 16분(셔플)으로."""
-    split = []
-    for n in notes:
-        if n.dur < 1:
-            split.append(Note(n.start, n.dur, n.midi))
-            continue
-        t, end = n.start, n.start + n.dur
-        while end - t > 1e-6:
-            split.append(Note(t, min(0.5, end - t), n.midi))
-            t += 0.5
-    for p, n in zip(split, split[1:]):
-        if abs(p.start % 1) < 1e-6 and abs(p.dur - 0.5) < 1e-6 and abs(n.start - p.start - 0.5) < 1e-6 and n.dur <= 0.5 + 1e-6:
-            p.dur = 0.75
-            n.start += 0.25
-            n.dur = max(0.25, n.dur - 0.25)
-    return split
-
-
-def _inversion(notes, root, scale):
-    """첫 음을 축으로 음계 칸을 뒤집고, 음역은 원래 멜로디 가운데로 옮긴다."""
-    axis = _degree(notes[0].midi, root, scale)[0]
-    out = [Note(n.start, n.dur, _pitch(2 * axis - _degree(n.midi, root, scale)[0], 0, root, scale)) for n in notes]
-    return _recenter(out, notes)
-
-
-def _retrograde(notes):
-    lead = notes[0].start
-    end = max(n.start + n.dur for n in notes)
-    return sorted((Note(lead + end - (n.start + n.dur), n.dur, n.midi) for n in notes), key=lambda n: n.start)
 
 
 def _nearest(midi: int, root: int, scale, degrees) -> int:
@@ -252,11 +179,6 @@ def _finish(notes, root, scale, bar: float, grid: float):
     return out
 
 
-def _recenter(notes, like):
-    shift = 12 * round((statistics.median(n.midi for n in like) - statistics.median(n.midi for n in notes)) / 12)
-    return [Note(n.start, n.dur, n.midi + shift) for n in notes]
-
-
 def _spell(midi: int, keyacc: dict, bar_acc: dict, sharp: bool) -> str:
     """조표·같은 마디 임시표를 따져 필요한 때만 ^ _ = 를 붙인다(abc_events 파서와 같은 규칙)."""
     default = lambda letter: {"#": 1, "b": -1}.get(keyacc.get(letter), 0)
@@ -325,20 +247,6 @@ def vary(abc: str, name: str) -> tuple[str, str]:
     if name in ("화음 멜로디", "아래 화음 멜로디"):
         out = _harmony(notes, root, scale, minor, parsed.key, float(parsed.meter[0]), float(parsed.tempo or 100),
                        below=name == "아래 화음 멜로디")
-    elif name == "분위기 바꾸기":
-        out = _mood(notes, root, scale, minor)
-        key = key[:-1] if minor else key + "m"
-        key = ENHARMONIC.get(key, key)
-    elif name == "꾸밈 넣기":
-        out = _ornament(notes, root, scale)
-    elif name == "통통 튀게":
-        out = _bounce(notes)
-    elif name == "위아래 뒤집기":
-        out = _inversion(notes, root, scale)
-    elif name == "거꾸로":
-        out = _retrograde(notes)
-    elif name == "한 단계 위로":
-        out = _sequence(notes, root, scale)
     elif name == "멜로디 완성하기":
         out = _finish(notes, root, scale, parsed.meter[0], 0.5 if parsed.meter[1] == 4 else 1.0)
     else:

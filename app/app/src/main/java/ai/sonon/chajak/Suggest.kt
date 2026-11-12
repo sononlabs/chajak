@@ -57,8 +57,6 @@ object Suggest {
             if (voice != want) out += Suggestion("내 음역은 ${type.name} 쪽이에요. ${if (type.male) "남성" else "여성"} 목소리면 따라 부르기 편해요.",
                 "${if (type.male) "남성" else "여성"} 목소리로 새 버전", "remix:voice=$want")
         }
-        if (o.optInt("style_weight", 50) < 50)
-            out += Suggestion("스타일 강도 ${o.optInt("style_weight")}이라 장르 색이 옅을 수 있어요.", "스타일 70으로 새 버전", "remix:style=70")
         val score = song.optJSONArray("tracks")?.optJSONObject(0)?.optJSONArray("score")
         val span = score?.let { s -> (0 until s.length()).map { s.getJSONObject(it).optInt("midi") }.let { m -> if (m.isEmpty()) 99 else m.max() - m.min() } } ?: 99
         if (o.optInt("melody_weight", 80) >= 70 && span < 6)

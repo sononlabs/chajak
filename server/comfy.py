@@ -21,17 +21,11 @@ DEFAULT_INSTRUMENT = "GM 0 Grand Piano"
 CHORD_INSTRUMENT = "GM 89 Warm Pad"
 BASS_INSTRUMENT = "GM 33 Finger Bass"
 # 앱의 멜로디 처리 단계 → 자유도 노드 값 (13번 문서 5-1)
-MELODY_FREEDOM = {"그대로": 0.0, "다듬기": 0.5, "AI 편곡": 0.9}
+MELODY_FREEDOM = {"그대로": 0.0, "다듬기": 0.5}
 # 변주 id → (노드 이름, 어울리는 쌓기 방식, 앱에 보여줄 설명). 노드 쪽 목록: melody_variation.VARIATIONS
 VARIATIONS = {
     "harmony": ("화음 멜로디", "overlay", "마디 화음에 맞춰 내 멜로디 위에서 함께 부르는 둘째 목소리"),
     "harmony_low": ("아래 화음 멜로디", "overlay", "마디 화음에 맞춰 내 멜로디 아래에서 받쳐 주는 둘째 목소리"),
-    "mood": ("분위기 바꾸기", "append", "밝은 장조는 쓸쓸한 단조로, 단조는 밝은 장조로"),
-    "ornament": ("꾸밈 넣기", "append", "음 사이를 잇는 꾸밈음을 넣어 더 노래처럼"),
-    "bounce": ("통통 튀게", "append", "긴 음을 쪼개고 셔플 리듬으로"),
-    "inversion": ("위아래 뒤집기", "append", "올라가던 음은 내려가고, 내려가던 음은 올라가게"),
-    "retrograde": ("거꾸로", "append", "멜로디를 끝에서부터 거꾸로"),
-    "step_up": ("한 단계 위로", "append", "같은 멜로디를 음계 한 칸 위에서 다시"),
     "finish": ("멜로디 완성하기", "append", "음계·박자를 맞추고 프레이즈 끝을 닫아 한 곡처럼"),
     # 노드 변주가 아니라 서버(melody_ai)가 LLM 으로 다시 쓴다. 이름 칸은 앱 표시용
     "rewrite": ("AI로 멜로디 살리기", "append", "허밍은 참고만 하고 AI가 더 노래다운 8마디로 새로 써요"),
@@ -311,27 +305,6 @@ def abc_graph(abc: str, instrument: str, accompaniment: bool, tempo: int, transp
     return _render(p, ["abc_in", 0], instrument, accompaniment, tempo, transpose, prefix)
 
 
-def ai_graph(abc: str, use_lyrics: bool, lyrics: str, seed: int, prefix: str) -> dict:
-    """AI 편곡: 다듬은 악보 → 가사 토글(멜로디 성부 배치) → YuE2 melody → 다시 전사해 보컬 확인."""
-    p = {
-        "abc_in": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": abc}},
-        "free": {"class_type": "PleosMelodyFreedom", "inputs": {"abc": ["abc_in", 0], "freedom": MELODY_FREEDOM["AI 편곡"]}},
-        "eta": {"class_type": "PreviewAny", "inputs": {"source": ["free", 2]}},
-        "lyr": {"class_type": "PleosLyricsToggle", "inputs": {"abc": ["free", 0], "use_lyrics": use_lyrics, "style": "warm indie pop, felt piano lead melody, warm bass, soft drums, gentle acoustic guitar, night drive home atmosphere, clean modern production", "lyrics": lyrics}},
-        "ckpt": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "yue2_3b_int8_convrot.safetensors"}},
-        "yue": {"class_type": "YuE2GenerateMusic", "inputs": {"clip": ["ckpt", 1], "style": ["lyr", 1], "lyrics": ["lyr", 2], "abc": ["lyr", 0], "seed": seed, "mode": "melody", "max_duration": 30.0, "temperature": 0.7, "top_p": 0.95, "top_k": 100, "repetition_penalty": 1.2, "cfg_scale": 1.0}},
-        "neg": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["yue", 0]}},
-        "lat": {"class_type": "EmptyYuE2LatentAudio", "inputs": {"seconds": ["yue", 1], "batch_size": 1}},
-        "ks": {"class_type": "KSampler", "inputs": {"model": ["ckpt", 0], "seed": seed, "steps": 32, "cfg": 1.0, "sampler_name": "dpm_2", "scheduler": "sgm_uniform", "positive": ["yue", 0], "negative": ["neg", 0], "latent_image": ["lat", 0], "denoise": 1.0}},
-        "dec": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["ks", 0], "vae": ["ckpt", 2]}},
-        "enc": {"class_type": "AudioEncoderLoader", "inputs": {"audio_encoder_name": "sheetsage2_bf16.safetensors"}},
-        "resheet": {"class_type": "SheetSage2AudioToABC", "inputs": {"audio_encoder": ["enc", 0], "audio": ["dec", 0], "mode": "melody"}},
-        "vcheck": {"class_type": "PleosVocalCheck", "inputs": {"abc": ["resheet", 0], "use_lyrics": ["lyr", 3]}},
-        "vcheck_out": {"class_type": "PreviewAny", "inputs": {"source": ["vcheck", 0]}},
-    }
-    return _save(p, ["dec", 0], prefix)
-
-
 def song_form_graph(abc: str, seconds: float, sung: bool = True) -> dict:
     """허밍 악보 → 약 2분 곡 악보(화음 표기) + 계획 JSON. 규칙 기반이라 1초 안쪽."""
     return {
@@ -417,9 +390,3 @@ def abc_header(abc: str):
     q = re.search(r"^Q:.*?=\s*([\d.]+)", abc, re.M)
     k = re.search(r"^K:\s*(\S+)", abc, re.M)
     return (round(float(q.group(1))) if q else 120), (k.group(1) if k else "C")
-
-
-def eta_seconds(summary: str):
-    """자유도 노드 요약의 '약 N초 · … 최대 M초'."""
-    m = re.search(r"약 (\d+)초.*?최대 (\d+)초", summary)
-    return (int(m.group(1)), int(m.group(2))) if m else (None, None)

@@ -163,9 +163,6 @@ def song_view(song: dict) -> dict:
     out["audio_url"] = base + "/audio"
     out["tracks"] = [_track_view(song, t, base) for t in song["tracks"]]
     out["mood"] = out["tracks"][0]["mood"] if out["tracks"] else None
-    if song.get("ai"):
-        out["ai"] = {**song["ai"], "audio_url": base + "/ai/audio" if song["ai"].get("file") else None}
-        out["ai"].pop("file", None)
     return out
 
 
@@ -295,7 +292,7 @@ async def create_song(request):
     track["input"] = source
     store: Store = request.app["store"]
     song = {"id": song_id, "created": _now_iso(), "tempo": track["tempo"], "key": track["key"],
-            "tracks": [track], "ai": None}
+            "tracks": [track]}
     store.save(song)
     d = store.dir(song_id)
     (d / track["file"]).write_bytes(audio)
@@ -303,26 +300,6 @@ async def create_song(request):
     song["duration_sec"] = mix_song(d, song["tracks"])
     store.save(song)
     return web.json_response(song_view(song), status=201)
-
-
-async def add_track(request):
-    """트랙 쌓기. 필드: audio, instrument, mode(overlay|append), melody(그대로|다듬기). 곡 템포에 맞춰 연주한다."""
-    store: Store = request.app["store"]
-    song_id = request.match_info["song_id"]
-    store.dir(song_id)
-    data, filename, f = await _form(request)
-    mode = _option(f, "mode", TRACK_MODES, "overlay")
-    melody = _option(f, "melody", ("그대로", "다듬기"), "그대로")
-    source = _option(f, "input", ("hum", "music"), "hum")
-    async with store.lock(song_id):
-        song = store.load(song_id)
-        n = len(song["tracks"]) + 1
-        track, audio = await _render_track(request.app, song_id, n, data, filename,
-                                           f.get("instrument", C.DEFAULT_INSTRUMENT), melody, False, song, source == "music")
-        track["mode"] = mode
-        track["input"] = source
-        (store.dir(song_id) / f"hum{n}").with_suffix(Path(filename).suffix or ".wav").write_bytes(data)
-        return _append_track(store, store.load(song_id), track, audio)
 
 
 def _append_track(store: Store, song: dict, track: dict, audio: bytes):
@@ -395,23 +372,6 @@ async def _add_variation(request, store: Store, song: dict, body: dict):
         "render_info": info, "seconds": round(time.perf_counter() - t0, 2), "abc": out_abc, "file": f"track{n}.flac",
     }
     return _append_track(store, store.load(song["id"]), track, audio)
-
-
-async def delete_track(request):
-    """마지막 트랙 빼기(들어보고 마음에 안 들 때). 첫 트랙은 뺄 수 없다."""
-    store: Store = request.app["store"]
-    song_id = request.match_info["song_id"]
-    store.dir(song_id)
-    async with store.lock(song_id):
-        song = store.load(song_id)
-        n = int(request.match_info["n"])
-        if n == 1 or n != len(song["tracks"]):
-            raise ApiError(400, "BAD_REQUEST", "마지막에 쌓은 트랙만 뺄 수 있어요.")
-        d = store.dir(song["id"])
-        (d / song["tracks"].pop()["file"]).unlink(missing_ok=True)
-        song["duration_sec"] = mix_song(d, song["tracks"])
-        store.save(song)
-        return web.json_response(song_view(song))
 
 
 # ComfyUI 폴더: 서버를 ComfyUI venv 의 python 으로 켜므로(README) 그 위 폴더. 다르면 CHAJAK_COMFY_DIR.
@@ -585,56 +545,6 @@ async def track_audio(request):
     if track is None:
         raise ApiError(404, "NOT_FOUND", "트랙을 찾을 수 없어요.")
     return _file_response(store.dir(song["id"]) / track["file"])
-
-
-async def ai_audio(request):
-    return _file_response(request.app["store"].dir(request.match_info["song_id"]) / "ai.flac")
-
-
-async def start_ai(request):
-    """AI 편곡 시작(약 25~47초). 본문 JSON: {"lyrics": false, "lyrics_text": ""}. 결과는 /v1/jobs/{id} 로 확인."""
-    store: Store = request.app["store"]
-    song = store.load(request.match_info["song_id"])
-    body = await _json(request)
-    use_lyrics = bool(body.get("lyrics", False))
-    lyrics = str(body.get("lyrics_text", "")) if use_lyrics else ""
-    if use_lyrics and not lyrics.strip():
-        raise ApiError(400, "NO_LYRICS", "가사 있음이면 lyrics_text 가 필요해요.")
-    job_id = uuid.uuid4().hex[:12]
-    job = {"id": job_id, "song_id": song["id"], "status": "queued", "lyrics": use_lyrics,
-           "eta_sec": None, "eta_max_sec": None, "created": time.time()}
-    request.app["jobs"][job_id] = job
-    _spawn(request.app, (_run_ai(request.app, job, song, lyrics)))
-    return web.json_response(job, status=202)
-
-
-async def _run_ai(app, job: dict, song: dict, lyrics: str):
-    """보컬이 섞이면(가사 없음일 때) 시드를 바꿔 한 번 더 만든다(13번 문서 5-2)."""
-    cf: C.Comfy = app["comfy"]
-    store: Store = app["store"]
-    abc = song["tracks"][0]["abc"]
-    job["status"] = "running"
-    try:
-        for attempt in (1, 2):
-            seed = int(uuid.uuid4().int % 2**31)
-            outputs = await cf.run(C.ai_graph(abc, job["lyrics"], lyrics, seed, f"chajak_server/{song['id']}_ai"))
-            job["eta_sec"], job["eta_max_sec"] = C.eta_seconds(C.text(outputs, "eta"))
-            check = C.text(outputs, "vcheck_out")
-            leaked = check.startswith("⚠")
-            if not leaked or job["lyrics"] or attempt == 2:
-                break
-        audio = await cf.fetch_audio(outputs, "save")
-        d = store.dir(song["id"])
-        (d / "ai.flac").write_bytes(audio)
-        async with store.lock(song["id"]):
-            fresh = store.load(song["id"])
-            fresh["ai"] = {"lyrics": job["lyrics"], "vocal_check": check, "vocal_leak": leaked, "attempts": attempt,
-                           "seconds": round(time.time() - job["created"], 1), "file": "ai.flac"}
-            store.save(fresh)
-        job.update(status="done", vocal_leak=leaked, attempts=attempt, audio_url=f"/v1/songs/{song['id']}/ai/audio",
-                   seconds=fresh["ai"]["seconds"])
-    except Exception as e:
-        job.update(status="failed", error=_fail_message(e, "AI 편곡을 만들지 못했어요."))
 
 
 async def themes(request):
@@ -1310,15 +1220,11 @@ def make_app(comfy_url: str) -> web.Application:
         web.post("/v1/songs", create_song),
         web.get("/v1/songs/{song_id}", get_song),
         web.get("/v1/songs/{song_id}/audio", song_audio),
-        web.post("/v1/songs/{song_id}/tracks", add_track),
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/audio", track_audio),
-        web.delete("/v1/songs/{song_id}/tracks/{n:\\d+}", delete_track),
         web.delete("/v1/songs/{song_id}", delete_song),
         web.delete("/v1/songs/{song_id}/finals/{final_id}", delete_final),
         web.get("/v1/variations", variations),
         web.post("/v1/songs/{song_id}/variations", add_variation),
-        web.post("/v1/songs/{song_id}/ai", start_ai),
-        web.get("/v1/songs/{song_id}/ai/audio", ai_audio),
         web.get("/v1/jobs/{job_id}", get_job),
         web.get("/v1/jobs/{job_id}/cover", job_cover),
         web.post("/v1/jobs/{job_id}/cancel", cancel_job),

@@ -59,7 +59,7 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * 차작 MVP: 흥얼거리기 → 서버에서 악기 연주 + 자동 반주 → 듣기 → 화음 붙이기 · 이어 부르기 · 멜로디 변주로 트랙 쌓기.
+ * 차작 MVP: 흥얼거리기 → 서버에서 악기 연주 + 자동 반주 → 듣기 → 멜로디 다듬기 · 화음 붙이기 → 노래 만들기.
  * 화면은 Pleos Connect Design System 라이트 테마(색·글자·버튼 수치는 아래 companion 참고).
  */
 class MainActivity : Activity() {
@@ -95,17 +95,14 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
 
     // 녹음 설정 (길이는 정하지 않고 사용자가 멈출 때까지, 최대 MAX_RECORD_SEC)
-    private var instrument = 0
     private var melody = "그대로"
     private var accompaniment = true
-    /** null 이면 새 곡, 아니면 쌓기 방식(overlay|append). */
-    private var stackMode: String? = null
 
     private var song: JSONObject? = null
     private var playing: String? = null
     @Volatile private var driving = false
     private var recording = false
-    private var instrumentNames = INSTRUMENTS.map { "GM ${it.second} ${it.third}" }.toMutableList()
+    private var pianoName = "GM 0 Grand Piano"
     private var variations = DEFAULT_VARIATIONS
 
     /** 시험 모드: 마이크 대신 앱 files 폴더의 녹음 파일을 차례로 보낸다(am start --es test_inputs a.wav,b.wav). */
@@ -165,7 +162,6 @@ class MainActivity : Activity() {
                 recording || counting -> Gleo.respond(this, action, "fail", "A recording is already in progress.")
                 pending != null -> Gleo.respond(this, action, "fail", "The previous humming is still being converted. Please try again in a moment.")
                 else -> ui.postDelayed({
-                    stackMode = null
                     startRecording()
                     if (counting) Gleo.respond(this, action, "success", "Recording starts after the 3-2-1 beeps. Say finish or press play-pause on the steering wheel when done.", "silent")
                     else Gleo.respond(this, action, "fail", "Recording could not start because another sound is using the audio. Please try again after it ends.")
@@ -237,7 +233,7 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val s = api.song(songId)
-                ui.post { song = s; stackMode = null; playerVersion = null; showPlayer(autoplay = true) }
+                ui.post { song = s; playerVersion = null; showPlayer(autoplay = true) }
             } catch (e: Exception) {
                 ui.post { showError(e.message ?: "노래를 열지 못했어요.") }
             }
@@ -362,7 +358,7 @@ class MainActivity : Activity() {
         try {
             val all = api.instruments().getJSONArray("instruments")
             val names = (0 until all.length()).map { all.getString(it) }
-            instrumentNames = INSTRUMENTS.map { (_, gm, en) -> names.firstOrNull { it.startsWith("GM $gm ") } ?: "GM $gm $en" }.toMutableList()
+            pianoName = names.firstOrNull { it.startsWith("GM 0 ") } ?: pianoName
             val v = api.variations().getJSONArray("variations")
             variations = (0 until v.length()).map { v.getJSONObject(it).let { o -> Variation(o.getString("id"), o.getString("name"), o.getString("description")) } }
         } catch (e: Exception) {
@@ -540,7 +536,7 @@ class MainActivity : Activity() {
     private fun openTab(t: Tab) {
         tab = t
         when (t) {
-            Tab.STUDIO -> { stackMode = null; showHome() }
+            Tab.STUDIO -> showHome()
             Tab.MUSIC -> { loadLibrary(); showMusicList() }
             Tab.MELODIES -> { loadLibrary(); showMelodyList() }
             Tab.SETTINGS -> showSettings()
@@ -772,28 +768,23 @@ class MainActivity : Activity() {
      */
     private fun showHome() {
         tab = Tab.STUDIO
-        val stacking = stackMode != null && song != null
         show({
             onHome = true
             addView(steps(0))
             // 녹음 장치는 제목 줄 오른쪽 끝에(2026-11-10 사용자: "녹음 장치는 오른쪽 정렬")
-            addView(titleRow(headline(if (stacking) (if (stackMode == "overlay") "겹쳐 부르기" else "이어 부르기") else "녹음실"),
+            addView(titleRow(headline("녹음실"),
                              if (testInputs.isEmpty()) inputPill() else View(this@MainActivity)))
-            addView(body(if (stacking) "지금 멜로디 위에 얹을 멜로디를 흥얼거려 주세요. 박자와 조성은 곡에 맞춰 드려요."
-                         else "떠오른 한 소절을 흥얼거려 보세요. 듣던 음악은 녹음하는 동안만 멈춰요."))
+            addView(body("떠오른 한 소절을 흥얼거려 보세요. 듣던 음악은 녹음하는 동안만 멈춰요."))
             addView(caption("5~30초 한 소절이면 가장 잘 돼요(최대 ${MAX_RECORD_SEC}초). 다 부르면 가운데 버튼을 누르세요.", TEXT3))
-            if (!stacking) {
-                resumeCard()?.let { addView(it) }
-                finalJob?.let { job -> addView(homeFinalCard(job)) }
-                addView(rangeCard())
-            }
+            resumeCard()?.let { addView(it) }
+            finalJob?.let { job -> addView(homeFinalCard(job)) }
+            addView(rangeCard())
         }, ::showHome, tabs = true) {
             // 녹음 세 가지(2026-11-10 사용자): 왼쪽 대화 녹음 · 가운데 허밍 녹음 · 오른쪽 음악 녹음
             // 세 버튼은 가운데로 모은다(2026-11-10 사용자: "너무 멀어서 중앙에 붙여줘") — 양옆 칸 폭이 같아 허밍 버튼은 그대로 한가운데
             val hum = if (!canRecord) recordButton(Rec.DISABLED, "녹음은 정차 후에", onClick = null) else recordButton(Rec.READY, "허밍 녹음") { startRecording() }
             aboveButton(notice?.also { notice = null }, TEXT) {
-                if (stacking) zones(button("내 멜로디로") { stackMode = null; showSong(false) }, listOf(hum), musicRecordButton(canRecord))
-                else zones(null, listOf(talkRecordButton().fixedWidth(), hum, musicRecordButton(canRecord).fixedWidth()),
+                zones(null, listOf(talkRecordButton().fixedWidth(), hum, musicRecordButton(canRecord).fixedWidth()),
                            if (testInputs.isNotEmpty()) text("시험 모드 · 마이크 대신\n${testInputs[testIndex % testInputs.size]}", BODY_S, POSITIVE) else null, gap = 96)
             }
         }
@@ -925,9 +916,9 @@ class MainActivity : Activity() {
         "녹음 장치 확인에서 소리가 들어오는 장치를 골라 주세요." +
         (if (DeviceCheck.emulator) " (에뮬레이터: PC 에 실제 마이크가 연결돼 있고 Windows 기본 녹음 장치로 잡혀 있는지 확인해 주세요.)" else "")
 
-    /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주·트랙 빼기 오류면 곡으로 돌아간다. */
+    /** 녹음·변환에서 난 오류면 가운데 녹음 버튼으로 같은 설정 그대로 다시 부른다. 변주 오류면 곡으로 돌아간다. */
     private fun showError(message0: String, deviceHelp: Boolean = false, settingsHelp: Boolean = false) {
-        val retry = song == null || stackMode != null
+        val retry = song == null
         val music = lastUploadMusic
         // 음악 녹음 실패인데 "흥얼거려 주세요"가 나왔다(2026-11-10 사용자) — 음악용 안내로
         val message = if (music && message0.contains("멜로디를 찾지 못했어요"))
@@ -941,7 +932,6 @@ class MainActivity : Activity() {
             val back = when {
                 settingsHelp -> button("⚙  설정") { showSettings() }
                 deviceHelp -> button("🔍  녹음 장치 확인") { showDeviceCheck() }
-                song != null && stackMode != null -> button("곡으로 돌아가기") { stackMode = null; showSong(false) }
                 song != null -> button("곡으로 돌아가기") { showSong(false) }
                 else -> button("← 녹음실") { showHome() }
             }
@@ -1244,11 +1234,7 @@ class MainActivity : Activity() {
                 right.addView(grid(harmony.map { v -> button(HARMONY_LABEL[v.id] ?: v.name, Btn.PRIMARY, size = Size.MEDIUM, enabled = idle) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 2))
                 right.addView(caption("다시 안 불러도 돼요. 내 멜로디의 화음에 맞춰 다른 악기로 둘째 목소리를 겹쳐요. 위는 플루트가 밝게, 아래는 첼로가 받쳐 줘요.", TEXT3))
             }
-            right.addView(button(if (showMore) "더 만들기 접기 ▴" else "더 만들기 · 악기 · 이어 부르기 · 변주 ▾", size = Size.MEDIUM) {
-                showMore = !showMore; refresh()
-            }.withMargin(top = 24))
-            if (showMore) right.addView(morePanel(idle, count))
-            right.addView(button("새로 흥얼거리기", size = Size.MEDIUM, enabled = idle) { stopPlayback(); song = null; stackMode = null; showHome() }.withMargin(top = 16))
+            right.addView(button("새로 흥얼거리기", size = Size.MEDIUM, enabled = idle) { stopPlayback(); song = null; showHome() }.withMargin(top = 24))
             if (s != null) {
                 val key = "song:" + s.optString("id")
                 val made = s.optJSONArray("finals")?.length() ?: (if (s.optJSONObject("final") != null) 1 else 0)
@@ -1286,30 +1272,11 @@ class MainActivity : Activity() {
         trackProgress(s?.optDouble("duration_sec", 0.0)?.toFloat() ?: 0f)
     }
 
-    private var showMore = false
-
     /** 내 멜로디에서 바로 노래 만들기: 이 곡 주제를 아직 안 정했으면 비워 둔 채(서버가 아무 주제나 고른다) 곧장 만든다. */
     private fun quickCreate() {
         val s = song ?: return
         if (promptFor != s.optString("id")) { prompt = ""; themeFromDrive = false; promptFor = s.optString("id") }
         createFinal()
-    }
-
-    /** 더 만들기(접힘): 다음에 얹을 악기 · 이어 부르기 · 변주 · 마지막 트랙 빼기. 주행 중에는 잠근다(정차해서).
-     *  흥얼거려 겹쳐 부르기는 2026-11-12 뺐다(화음 붙이기로 대신). 서버 overlay 녹음 API 와 예전 곡의 겹친 트랙은 그대로. */
-    private fun morePanel(idle: Boolean, count: Int) = column().apply {
-        background = round(SURFACE, 24)
-        setPadding(dp(28), dp(8), dp(28), dp(24))
-        val ok = idle && !driving
-        if (driving) addView(caption("주행 중에는 듣기와 다듬기만 돼요. 정차한 뒤 더 만들어 보세요.", TEXT3))
-        addView(label("얹을 악기"))
-        addView(grid(INSTRUMENTS.mapIndexed { i, ins -> button(ins.first, if (i == instrument) Btn.SECONDARY else Btn.PRIMARY, Size.MEDIUM) { instrument = i; saveDraft(); refresh() } }, 3))
-        addView(label("한 소절 이어 부르기"))
-        addView(button("흥얼거려 뒤에 이어 붙이기", size = Size.MEDIUM, enabled = ok && canRecord) { stackMode = "append"; showHome() })
-        addView(label("변주 · 다시 안 불러도 돼요"))
-        addView(grid(variations.filter { it.id !in POLISH && it.id !in HARMONY }.map { v -> button(v.name, size = Size.MEDIUM, enabled = ok) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 3))
-        if (count > 1) addView(button("마지막 트랙 빼기", size = Size.MEDIUM, enabled = ok) { deleteLast() }.withMargin(top = 16))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
     }
 
     /** AI 제안 카드: 고칠 점 2~3개, 줄마다 바로 적용 버튼. */
@@ -1332,7 +1299,7 @@ class MainActivity : Activity() {
         Log.i(tag, "AI 제안 적용: ${sg.action}")
         when {
             sg.action == "create" -> showCreate()
-            sg.action == "rehum" -> { stopPlayback(); song = null; stackMode = null; showHome() }
+            sg.action == "rehum" -> { stopPlayback(); song = null; showHome() }
             sg.action.startsWith("remix:") -> onRemix?.invoke(sg.action.removePrefix("remix:"))
             else -> variations.firstOrNull { it.id == sg.action }?.let { addVariation(it) }
         }
@@ -1377,14 +1344,13 @@ class MainActivity : Activity() {
             if (voice == "rap") addView(caption("랩: 허밍 멜로디 대신 새 힙합 비트 위에서 빠르게 랩해요. 가사도 줄 끝 각운을 맞춘 랩 가사로 써요.", TEXT3))
             addView(label("곡 길이"))
             addView(segmented(listOf("1분", "2분", "3분"), finalSeconds / 60 - 1, width = OPTION_W) { finalSeconds = (it + 1) * 60; saveDraft(); refresh() })
-            addView(button(if (showOptions) "세부 설정 접기 ▴" else "세부 설정 · 멜로디 반영 $melodyWeight · 스타일 강도 $styleWeight ▾", size = Size.MEDIUM) {
+            addView(button(if (showOptions) "세부 설정 접기 ▴" else "세부 설정 · 내 멜로디 ${MELODY_MODES[melodyMode()].first} ▾", size = Size.MEDIUM) {
                 showOptions = !showOptions; refresh()
             }.withMargin(top = 24))
             if (showOptions) addView(column().apply {
                 background = round(SURFACE, 24)
                 setPadding(dp(28), dp(8), dp(28), dp(24))
-                addView(weightSlider("내 멜로디 반영", "70 이상: 내 허밍 그대로 · 33~69: 허밍은 참고만, AI가 더 좋은 멜로디로 · 33 미만: AI가 자유롭게", melodyWeight) { melodyWeight = it; saveDraft() })
-                addView(weightSlider("스타일 강도", "높을수록 주제의 장르·분위기를 진하게", styleWeight) { styleWeight = it; saveDraft() })
+                melodyModeRows()
                 addView(label("멜로디 느낌"))
                 addView(segmented(listOf("멜로디 느낌 따르기", "주제만 보기"), if (followMood) 0 else 1, width = OPTION_W) {
                     followMood = it == 0; saveDraft(); refresh()
@@ -1880,7 +1846,7 @@ class MainActivity : Activity() {
             try {
                 val s = api.song(songId)
                 ui.post {
-                    song = s; stackMode = null; playerVersion = null
+                    song = s; playerVersion = null
                     talkResult = t; talkFor = songId
                     t.optString("theme").takeIf { it.isNotEmpty() }?.let { prompt = it; themeFromDrive = false; promptFor = songId; saveDraft() }
                     if (preview) showFormPreview(t) else { createFinal(); rememberTalkSong(t, songId) }
@@ -1995,7 +1961,7 @@ class MainActivity : Activity() {
                 val s = api.song(pick.getString("id"))
                 ui.post {
                     if (isDestroyed) return@post
-                    song = s; stackMode = null; playerVersion = null
+                    song = s; playerVersion = null
                     talkResult = null; talkFor = null
                     prompt = theme; themeFromDrive = false; promptFor = s.optString("id"); saveDraft()
                     createFinal(extra = voice.takeIf { it.isNotEmpty() }?.let { JSONObject().put("voice", it) })
@@ -2060,7 +2026,7 @@ class MainActivity : Activity() {
             try {
                 val s = api.song(id)
                 ui.post {
-                    song = s; stackMode = null; playerVersion = null
+                    song = s; playerVersion = null
                     when {
                         player && s.optJSONObject("final") != null -> showPlayer(false)
                         create -> showCreate()
@@ -2261,7 +2227,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // 세부 설정(가중치): 곡 길이 · 목소리 · 내 멜로디 반영 · 스타일 강도
+    // 세부 설정: 곡 길이 · 목소리 · 내 멜로디(그대로 · AI가 다듬기 · AI가 새로). 스타일 강도는 서버 기본값(50) — 화면에서 뺐다(11-13 사용자)
     private var showOptions = false
     private var finalSeconds = 120
     private var voice = "auto"
@@ -2271,7 +2237,16 @@ class MainActivity : Activity() {
     private var followMood = true
 
     private fun optionSummary() =
-        "${finalSeconds / 60}분 · ${VOICE_NAMES.getValue(voice)} · 멜로디 $melodyWeight · 스타일 $styleWeight"
+        "${finalSeconds / 60}분 · ${VOICE_NAMES.getValue(voice)} · 내 멜로디 ${MELODY_MODES[melodyMode()].first}"
+
+    /** 내 멜로디 반영 3단계(2026-11-13 사용자: 0~100 슬라이더 대신). 서버 기준 70 이상 그대로 · 33~69 AI가 다시 씀 · 33 미만 악보 없이. */
+    private fun melodyMode(weight: Int = melodyWeight) = when { weight >= 70 -> 0; weight >= 33 -> 1; else -> 2 }
+
+    private fun LinearLayout.melodyModeRows() {
+        addView(label("내 멜로디"))
+        addView(segmented(MELODY_MODES.map { it.first }, melodyMode(), width = OPTION_W) { melodyWeight = MELODY_MODES[it].second; saveDraft(); refresh() })
+        addView(caption(MELODY_MODES[melodyMode()].third, TEXT3))
+    }
 
     private fun optionsPanel() = column().apply {
         background = round(SURFACE, 24)
@@ -2282,29 +2257,8 @@ class MainActivity : Activity() {
         val voices = VOICE_NAMES.keys.toList()
         addView(segmented(VOICE_NAMES.values.toList(), voices.indexOf(voice), width = VOICE_W) { voice = voices[it]; saveDraft(); refresh() })
             if (voice == "rap") addView(caption("랩: 허밍 멜로디 대신 새 힙합 비트 위에서 빠르게 랩해요. 가사도 줄 끝 각운을 맞춘 랩 가사로 써요.", TEXT3))
-        addView(weightSlider("내 멜로디 반영", "70 이상: 내 허밍 그대로 · 33~69: 허밍은 참고만, AI가 더 좋은 멜로디로 · 33 미만: AI가 자유롭게", melodyWeight) { melodyWeight = it; saveDraft() })
-        addView(weightSlider("스타일 강도", "높을수록 주제의 장르·분위기를 진하게", styleWeight) { styleWeight = it; saveDraft() })
+        melodyModeRows()
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
-    }
-
-    /** 가중치 막대(0~100). 손을 떼면 값을 저장한다(다시 그리지 않아 끌기가 끊기지 않음). */
-    private fun weightSlider(name: String, help: String, value: Int, onSet: (Int) -> Unit) = column().apply {
-        val title = text("$name  $value", BODY_S_STRONG, TEXT3).withMargin(top = 24, bottom = 4)
-        addView(title)
-        addView(SeekBar(this@MainActivity).apply {
-            contentDescription = name
-            max = 100
-            progress = value
-            progressTintList = ColorStateList.valueOf(GRAY_600)
-            progressBackgroundTintList = ColorStateList.valueOf(TINT_PRESSED)
-            smallThumb(GRAY_600)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(b: SeekBar?, p: Int, fromUser: Boolean) { title.text = "$name  $p" }
-                override fun onStartTrackingTouch(b: SeekBar?) {}
-                override fun onStopTrackingTouch(b: SeekBar?) { onSet(progress) }
-            })
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
-        addView(text(help, BODY_S, TEXT3))
     }
 
     /**
@@ -2946,7 +2900,7 @@ class MainActivity : Activity() {
                     if (!driving) col.addView(suggestCard(Suggest.song(f, s, voiceRange), !finalSubmitting) { remix -> remixWith(f, remix) }.withMargin(top = 12))
                 }
                 // 다시 만들기(설정 다시 쓰기 · 다른 편곡 · 가사 고치기): 이 버전을 바탕으로 가중치·주제·가사를 바꿔 새 버전
-                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 가중치·가사·표지 ▾", size = Size.MEDIUM) {
+                col.addView(button(if (showRemix) "다시 만들기 접기 ▴" else "세부 설정으로 다시 만들기 · 멜로디·가사·표지 ▾", size = Size.MEDIUM) {
                     showRemix = !showRemix
                     if (showRemix) { prompt = f.getString("prompt"); f.optJSONObject("options")?.let { o ->
                         finalSeconds = o.optInt("seconds", 120); voice = o.optString("voice", "auto")
@@ -2955,7 +2909,7 @@ class MainActivity : Activity() {
                 }.withMargin(top = 16))
                 if (showRemix) {
                     val panel = column().apply { background = round(SURFACE, 24); setPadding(dp(28), dp(8), dp(28), dp(28)) }
-                    panel.addView(caption("지금: ${f.optString("style")} · 멜로디 ${f.optJSONObject("options")?.optInt("melody_weight")} · 스타일 ${f.optJSONObject("options")?.optInt("style_weight")}", TEXT3))
+                    panel.addView(caption("지금: ${f.optString("style")} · 내 멜로디 ${MELODY_MODES[melodyMode(f.optJSONObject("options")?.optInt("melody_weight", 80) ?: 80)].first}", TEXT3))
                     panel.addView(label("주제"))
                     panel.addView(promptRow(enabled = true))
                     panel.addView(optionsPanel())
@@ -3174,18 +3128,16 @@ class MainActivity : Activity() {
      * 음악 녹음: 듣던 음악을 멈추지 않고, 재생 중인 소리를 그대로 담는다(AudioPlaybackCapture — 동의 한 번으로 마지막 녹음 뒤 10분).
      * 동의를 못 받거나 차가 지원하지 않으면 차량 마이크로 듣는다. 다 담으면 허밍과 똑같이 음표로 바꿔 트랙·곡이 된다
      * (서버 SheetSage 가 노래 속 멜로디를 뽑는다). 원본은 음악 녹음 보관함에도 남는다.
-     * stack: 곡 화면에서 누르면 그 곡에 겹쳐/이어 쌓고, 그 밖에서는 지금 쌓기 방식(stackMode) 그대로.
-     */
-    private fun startMusicRecording(stack: String? = stackMode) {
+         */
+    private fun startMusicRecording() {
         if (recording || counting || pending != null || !active) return
-        if (!prefs.getBoolean(VOICE_NOTICE_SEEN, false) && !driving) { stackMode = stack; return showVoiceNotice(music = true) }
+        if (!prefs.getBoolean(VOICE_NOTICE_SEEN, false) && !driving) return showVoiceNotice(music = true)
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             musicPermissionPending = true
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MUSIC_RECORD)
             return
         }
         stopPlayback()
-        stackMode = stack
         if (android.os.Build.VERSION.SDK_INT < 29) return record(music = true)  // 재생 소리 녹음은 Android 10 부터
         // 차 안(앱들)에서 재생 중인 소리가 없으면 직접 담을 게 없다 — PC·폰 스피커로 트는 음악은 마이크로 담는다(2026-11-08:
         // 동의를 받아 두면 늘 재생 소리만 담아서, 에뮬레이터 밖 PC 에서 튼 음악이 무음으로 녹음됐다)
@@ -3355,7 +3307,7 @@ class MainActivity : Activity() {
                         button(if (playing == key) "■ 멈춤" else "▶ 녹음 듣기", size = Size.MEDIUM) { toggle(key, file.absolutePath) },
                         button("파일로 저장", size = Size.MEDIUM, enabled = !driving) { exportRecording(file) },
                         button("멜로디로 만들기", size = Size.MEDIUM, enabled = !driving && pending == null) {
-                            stopPlayback(); stackMode = null; song = null; upload(file, music = true)
+                            stopPlayback(); song = null; upload(file, music = true)
                         }
                     ).withMargin(top = 12))
                 }
@@ -3492,7 +3444,7 @@ class MainActivity : Activity() {
     private fun saveDraft() {
         prefs.edit().putString("draft_prompt", prompt).putInt("draft_seconds", finalSeconds)
             .putString("draft_voice", voice).putInt("draft_melody", melodyWeight)
-            .putInt("draft_style", styleWeight).putInt("draft_instrument", instrument)
+            .putInt("draft_style", styleWeight)
             .putString("draft_melody_mode", melody).putBoolean("draft_accompaniment", accompaniment)
             .putBoolean("draft_follow_mood", followMood).apply()
     }
@@ -3504,7 +3456,6 @@ class MainActivity : Activity() {
         melodyWeight = prefs.getInt("draft_melody", 80).coerceIn(0, 100)
         styleWeight = prefs.getInt("draft_style", 50).coerceIn(0, 100)
         followMood = prefs.getBoolean("draft_follow_mood", true)
-        instrument = prefs.getInt("draft_instrument", 0).coerceIn(0, INSTRUMENTS.lastIndex)
         melody = prefs.getString("draft_melody_mode", "그대로")?.takeIf { it in listOf("그대로", "다듬기") } ?: "그대로"
         accompaniment = prefs.getBoolean("draft_accompaniment", true)
     }
@@ -3702,7 +3653,7 @@ class MainActivity : Activity() {
                 // 갈 수 있는 단계는 눌러서 이동: 1 녹음실 · 2 내 멜로디(곡 있음) · 3 노래 만들기(곡 있음) · 4 완성(노래 있음)
                 val s = song
                 val go: (() -> Unit)? = when (i) {
-                    0 -> if (now) null else ({ stackMode = null; showHome() })
+                    0 -> if (now) null else ({ showHome() })
                     1 -> if (s != null && !now) ({ showSong(false) }) else null
                     2 -> if (s != null && !now) ({ showCreate() }) else null
                     else -> if (s?.optJSONObject("final") != null) ({ showPlayer(false) }) else null
@@ -4041,7 +3992,7 @@ class MainActivity : Activity() {
                     cancelled -> if (active) {
                         cancelled = false
                         notice = CANCELLED
-                        if (song != null) { stackMode = null; showSong(false) } else showHome()
+                        if (song != null) showSong(false) else showHome()
                     }
                     sec < 0 -> showError(if (music) "음악을 녹음하지 못했어요." else "마이크를 열지 못했어요.")
                     // 완전한 무음은 서버로 보내지 않는다 — 보내 봐야 "목소리가 들리지 않았어요(더 크게)"라는 엉뚱한 안내만 돌아온다
@@ -4064,21 +4015,13 @@ class MainActivity : Activity() {
 
     private fun upload(file: File, music: Boolean = false) {
         lastUploadMusic = music
-        val s = song
-        val mode = stackMode
-        val inst = instrumentNames[instrument]
-        val name = INSTRUMENTS[instrument].first
-        val n = (s?.getJSONArray("tracks")?.length() ?: 0) + 1
+        val name = INSTRUMENTS[0].first
         startPending(Pending(
-            "$n  $name · " + when (mode) { null -> if (music) "음악에서 뽑은 멜로디" else "내 허밍"; "overlay" -> "겹쳐 부르기"; else -> "이어 부르기" },
-            listOfNotNull(if (music) "노래 속 멜로디 찾는 중…" else "허밍 정리하는 중…", "음표 뽑는 중…", if (s != null) "곡 박자·조성에 맞추는 중…" else null,
-                          "${name}${ro(name)} 연주하는 중…", if (s == null && accompaniment) "반주 붙이는 중…" else null),
+            "1  $name · " + if (music) "음악에서 뽑은 멜로디" else "내 허밍",
+            listOfNotNull(if (music) "노래 속 멜로디 찾는 중…" else "허밍 정리하는 중…", "음표 뽑는 중…",
+                          "${name}${ro(name)} 연주하는 중…", if (accompaniment) "반주 붙이는 중…" else null),
         ))
-        call {
-            val source = if (music) "music" else "hum"
-            if (s == null || mode == null) api.createSong(file, inst, melody, accompaniment, source)
-            else api.addTrack(s.getString("id"), file, inst, melody, mode, source)
-        }
+        call { api.createSong(file, pianoName, melody, accompaniment, if (music) "music" else "hum") }
     }
 
     private fun addVariation(v: Variation) {
@@ -4092,13 +4035,6 @@ class MainActivity : Activity() {
                              else listOf("음표 다듬는 중…", "연주하는 중…"),
                              busy = if (v.id in HARMONY) "화음 붙이는 중" else if (v.id == "rewrite") "AI가 멜로디 쓰는 중" else "멜로디 다듬는 중"))
         call { api.addVariation(s.getString("id"), v.id) }
-    }
-
-    private fun deleteLast() {
-        val s = song ?: return
-        stopPlayback()
-        val n = s.getJSONArray("tracks").length()
-        call(autoplay = false) { api.deleteTrack(s.getString("id"), n) }
     }
 
     private fun endPending() {
@@ -4153,7 +4089,7 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val next = request()
-                ui.post { endPending(); song = next; stackMode = null; showSong(autoplay); loadLibrary() }
+                ui.post { endPending(); song = next; showSong(autoplay); loadLibrary() }
             } catch (e: ApiException) {
                 ui.post { endPending(); showError(e.message ?: "오류가 났어요.") }
             } catch (e: Exception) {
@@ -4468,7 +4404,7 @@ class MainActivity : Activity() {
         addView(text(if (driving) "대화는 정차 후에" else "대화 녹음", BODY_S, if (enabled) TEXT else TEXT3).withMargin(top = 8))
     }
 
-    private fun musicRecordButton(on: Boolean, stack: String? = stackMode): View = column().apply {
+    private fun musicRecordButton(on: Boolean): View = column().apply {
         gravity = Gravity.CENTER_HORIZONTAL
         // 처음(동의 전)에는 설명 화면과 시스템 확인 창이 떠서 주행 중에는 막는다. 동의가 살아 있으면(10분) 주행 중에도 한 번에
         val firstTime = driving && projection == null && android.os.Build.VERSION.SDK_INT >= 29 && musicNeedsCapture()
@@ -4477,7 +4413,7 @@ class MainActivity : Activity() {
             background = if (enabled) pressable(oval(POSITIVE), oval(GRAY_700)) else oval(TINT)
             contentDescription = if (enabled) "음악을 멈추지 않고 녹음해 멜로디로" else "음악 녹음 사용 불가"
             isEnabled = enabled
-            if (enabled) setOnClickListener { startMusicRecording(stack) }
+            if (enabled) setOnClickListener { startMusicRecording() }
             addView(text("♪ ●", BODY_STRONG, if (enabled) Color.WHITE else TEXT_DISABLED),
                 FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         }
@@ -4812,19 +4748,23 @@ class MainActivity : Activity() {
         const val PAGE_H = 64
         const val PAGE_V = 32
 
-        /** (화면 이름, GM 번호, 사운드폰트 이름) — UI 시안의 고정 6개. */
+        /** (화면 이름, GM 번호, 사운드폰트 이름) — 트랙 이름 표시용. 새 곡 첫 트랙은 피아노(0번). */
         val INSTRUMENTS = listOf(
             Triple("피아노", 0, "Grand Piano"), Triple("첼로", 42, "Cello"), Triple("바이올린", 40, "Violin"),
             Triple("플루트", 73, "Flute"), Triple("리코더", 74, "Recorder"), Triple("마림바", 12, "Marimba"),
         )
 
         /** 서버 목록을 못 받았을 때 쓰는 기본값(서버 comfy.VARIATIONS 와 같은 순서). */
+        /** (버튼 이름, 서버에 보낼 melody_weight, 설명). */
+        val MELODY_MODES = listOf(
+            Triple("그대로", 80, "흥얼거린 멜로디를 그대로 불러요."),
+            Triple("AI가 다듬기", 50, "내 멜로디를 바탕으로 AI가 더 노래다운 멜로디로 다시 써요."),
+            Triple("AI가 새로", 20, "내 멜로디 없이 주제와 분위기만으로 AI가 새로 지어요."),
+        )
+
         val DEFAULT_VARIATIONS = listOf(
             Variation("harmony", "화음 멜로디", "화음에 맞춘 위 둘째 목소리"),
-            Variation("harmony_low", "아래 화음 멜로디", "화음에 맞춘 아래 둘째 목소리"), Variation("mood", "분위기 바꾸기", "장조↔단조"),
-            Variation("ornament", "꾸밈 넣기", "꾸밈음 추가"), Variation("bounce", "통통 튀게", "셔플 리듬"),
-            Variation("inversion", "위아래 뒤집기", "음 방향 반대로"), Variation("retrograde", "거꾸로", "끝에서부터"),
-            Variation("step_up", "한 단계 위로", "음계 한 칸 위에서 다시"),
+            Variation("harmony_low", "아래 화음 멜로디", "화음에 맞춘 아래 둘째 목소리"),
             Variation(FINISH, "멜로디 완성하기", "음계·박자를 맞추고 프레이즈 끝을 닫아 한 곡처럼"),
             Variation("rewrite", "AI로 멜로디 살리기", "허밍은 참고만 하고 AI가 더 노래다운 8마디로 새로 써요"),
         )

@@ -375,7 +375,7 @@ class PleosMelodyVariation(io.ComfyNode):
             description=" / ".join(f"{k}: {v}" for k, v in VARIATIONS.items()),
             inputs=[
                 io.String.Input("abc", force_input=True),
-                io.Combo.Input("variation", options=list(VARIATIONS), tooltip="화음 멜로디는 겹치기, 한 단계 위로는 이어 붙이기에 잘 어울려요"),
+                io.Combo.Input("variation", options=list(VARIATIONS), tooltip="화음 멜로디는 원래 멜로디에 겹쳐 연주해요"),
             ],
             outputs=[
                 io.String.Output(display_name="abc"),

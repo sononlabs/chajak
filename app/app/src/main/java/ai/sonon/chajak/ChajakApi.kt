@@ -15,13 +15,8 @@ class ChajakApi(val base: String) {
     fun createSong(hum: File, instrument: String, melody: String, accompaniment: Boolean, source: String = "hum"): JSONObject =
         multipart("/v1/songs", hum, mapOf("instrument" to instrument, "melody" to melody, "accompaniment" to accompaniment.toString(), "input" to source))
 
-    fun addTrack(songId: String, hum: File, instrument: String, melody: String, mode: String, source: String = "hum"): JSONObject =
-        multipart("/v1/songs/$songId/tracks", hum, mapOf("instrument" to instrument, "melody" to melody, "mode" to mode, "input" to source))
-
     fun addVariation(songId: String, variation: String): JSONObject =
         request("POST", "/v1/songs/$songId/variations", JSONObject().put("variation", variation))
-
-    fun deleteTrack(songId: String, n: Int): JSONObject = request("DELETE", "/v1/songs/$songId/tracks/$n", null)
 
     /** 곡 지우기: 멜로디·트랙·노래 모든 버전·표지(서버와 생성 엔진에 남은 사본까지). */
     fun deleteSong(songId: String): JSONObject = request("DELETE", "/v1/songs/$songId", null)
