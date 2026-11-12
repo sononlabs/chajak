@@ -1270,7 +1270,7 @@ class MainActivity : Activity() {
             val done = s?.optJSONObject("final") != null
             zones(play,
                 listOf(when {
-                    s == null || !idle -> recordButton(Rec.BUSY, if (p != null) "음표로 바꾸는 중" else "노래 만드는 중", onClick = null)
+                    s == null || !idle -> recordButton(Rec.BUSY, p?.busy ?: "노래 만드는 중", onClick = null)
                     done -> button("완성된 노래 →", Btn.SECONDARY) { showPlayer(false) }
                     // 버튼 한 번: 주제는 서버가 아무거나·자동 목소리로 바로 만든다(주행 중에도 됨). 바꾸고 싶으면 오른쪽 작은 버튼
                     else -> button("바로 노래 만들기", Btn.SECONDARY) { quickCreate() }
@@ -4089,7 +4089,8 @@ class MainActivity : Activity() {
                              else "${tracks.length() + 1}  ${instrumentLabel(tracks.getJSONObject(0).getString("instrument"))} · 변주 · ${v.name}",
                              if (v.id == "rewrite") listOf("허밍 동기 읽는 중…", "AI가 8마디 멜로디 쓰는 중…", "박자·음계 검사하는 중…", "연주하는 중…")
                              else if (v.id in HARMONY) listOf("마디 화음 읽는 중…", "둘째 목소리 고르는 중…", "연주하는 중…")
-                             else listOf("음표 다듬는 중…", "연주하는 중…")))
+                             else listOf("음표 다듬는 중…", "연주하는 중…"),
+                             busy = if (v.id in HARMONY) "화음 붙이는 중" else if (v.id == "rewrite") "AI가 멜로디 쓰는 중" else "멜로디 다듬는 중"))
         call { api.addVariation(s.getString("id"), v.id) }
     }
 
@@ -4596,7 +4597,7 @@ class MainActivity : Activity() {
     data class Variation(val id: String, val name: String, val description: String)
 
     /** 만들고 있는 트랙: 카드 제목과 차례로 보여 줄 단계 문구. */
-    data class Pending(val title: String, val steps: List<String>)
+    data class Pending(val title: String, val steps: List<String>, val busy: String = "음표로 바꾸는 중")
 
     /** Pleos 텍스트 스타일: 크기 · 줄 높이(sp/px) · Asta Sans 굵기. */
     data class Typo(val size: Int, val line: Int, val font: Int)
