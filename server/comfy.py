@@ -37,6 +37,17 @@ VARIATIONS = {
     "rewrite": ("AI로 멜로디 살리기", "append", "허밍은 참고만 하고 AI가 더 노래다운 8마디로 새로 써요"),
 }
 SERVER_VARIATIONS = {"rewrite"}
+# 화음 줄은 내 멜로디와 다른 소리로 연주해야 두 줄이 섞이지 않고 들린다(2026-11-12 사용자).
+# 변주 id → (기본 악기, 원래 트랙이 그 악기일 때 대신 쓸 악기). 요청에 instrument 를 주면 그걸 쓴다
+HARMONY_INSTRUMENTS = {"harmony": ("GM 73 Flute", "GM 40 Violin"), "harmony_low": ("GM 42 Cello", "GM 71 Clarinet")}
+HARMONY_GAIN_DB = -23.0  # 둘째 목소리는 멜로디보다 한 발 뒤에. 플루트·첼로는 길게 끌어 크게 들림 — 시험(A장조 허밍): 반주 붙은 멜로디 트랙 RMS -15.6dB 에 플루트 약 -20·첼로 약 -22dB
+
+
+def harmony_instrument(variation: str, source_instrument: str) -> str | None:
+    pair = HARMONY_INSTRUMENTS.get(variation)
+    if pair is None:
+        return None
+    return pair[1] if source_instrument == pair[0] else pair[0]
 NO_MELODY_HINTS =("MelodyVoice", "멜로디 음표를 찾지 못", "ABC 텍스트가 비어", "음표가 없")
 NO_VOICE_HINTS = ("음성 구간을 찾지 못",)
 
@@ -261,12 +272,13 @@ def _save(p: dict, audio_ref: list, prefix: str) -> dict:
     return p
 
 
-def _render(p: dict, abc_ref: list, instrument: str, accompaniment: bool, tempo: int, transpose: int, prefix: str) -> dict:
+def _render(p: dict, abc_ref: list, instrument: str, accompaniment: bool, tempo: int, transpose: int, prefix: str,
+            gain_db: float = -6.0) -> dict:
     """반주를 붙이면 자동 반주(멜로디+화음+베이스, 악보 템포·조성 그대로), 아니면 악기 하나로 tempo·transpose 에 맞춰 연주."""
     if accompaniment:
         p["render"] = {"class_type": "PleosAutoArrange", "inputs": {"abc": abc_ref, "soundfont": SOUNDFONT, "melody_instrument": instrument, "chord_instrument": CHORD_INSTRUMENT, "bass_instrument": BASS_INSTRUMENT, "reverb_mix": 0.2}}
     else:
-        p["render"] = {"class_type": "PleosSoundFontRender", "inputs": {"abc_text": abc_ref, "soundfont": SOUNDFONT, "instrument": instrument, "voice": "auto", "tempo": int(tempo), "transpose": int(transpose), "velocity": 100, "gain_db": -6.0, "loop_count": 1, "reverb_mix": 0.18, "reverb_room": 0.9, "samplerate": 44100}}
+        p["render"] = {"class_type": "PleosSoundFontRender", "inputs": {"abc_text": abc_ref, "soundfont": SOUNDFONT, "instrument": instrument, "voice": "auto", "tempo": int(tempo), "transpose": int(transpose), "velocity": 100, "gain_db": float(gain_db), "loop_count": 1, "reverb_mix": 0.18, "reverb_room": 0.9, "samplerate": 44100}}
     p["render_info"] = {"class_type": "PreviewAny", "inputs": {"source": ["render", 1]}}
     return _save(p, ["render", 0], prefix)
 
@@ -279,7 +291,7 @@ def track_graph(upload_name: str, instrument: str, melody: str, accompaniment: b
 
 
 def variation_graph(abc: str, variation: str, instrument: str, accompaniment: bool, tempo: int, transpose: int,
-                    prefix: str) -> dict:
+                    prefix: str, gain_db: float = -6.0) -> dict:
     """이미 뽑은 악보로 변주 멜로디를 만들어 연주한다(허밍 전사 없이)."""
     p = {
         "abc_in": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": abc}},
@@ -287,7 +299,7 @@ def variation_graph(abc: str, variation: str, instrument: str, accompaniment: bo
         "abc_out": {"class_type": "PreviewAny", "inputs": {"source": ["var", 0]}},
         "var_info": {"class_type": "PreviewAny", "inputs": {"source": ["var", 1]}},
     }
-    return _render(p, ["var", 0], instrument, accompaniment, tempo, transpose, prefix)
+    return _render(p, ["var", 0], instrument, accompaniment, tempo, transpose, prefix, gain_db)
 
 
 def abc_graph(abc: str, instrument: str, accompaniment: bool, tempo: int, transpose: int, prefix: str) -> dict:

@@ -1242,7 +1242,7 @@ class MainActivity : Activity() {
             if (harmony.isNotEmpty()) {
                 right.addView(label("화음 붙이기"))
                 right.addView(grid(harmony.map { v -> button(HARMONY_LABEL[v.id] ?: v.name, Btn.PRIMARY, size = Size.MEDIUM, enabled = idle) { addVariation(v) }.apply { setPadding(dp(16), 0, dp(16), 0) } }, 2))
-                right.addView(caption("다시 안 불러도 돼요. 내 멜로디의 화음에 맞춰 둘째 목소리를 겹쳐요. 위는 밝게 함께 부르고, 아래는 받쳐 줘요.", TEXT3))
+                right.addView(caption("다시 안 불러도 돼요. 내 멜로디의 화음에 맞춰 다른 악기로 둘째 목소리를 겹쳐요. 위는 플루트가 밝게, 아래는 첼로가 받쳐 줘요.", TEXT3))
             }
             right.addView(button(if (showMore) "더 만들기 접기 ▴" else "더 만들기 · 악기 · 이어 부르기 · 변주 ▾", size = Size.MEDIUM) {
                 showMore = !showMore; refresh()
@@ -4085,7 +4085,8 @@ class MainActivity : Activity() {
         val s = song ?: return
         stopPlayback()
         val tracks = s.getJSONArray("tracks")
-        startPending(Pending("${tracks.length() + 1}  ${instrumentLabel(tracks.getJSONObject(0).getString("instrument"))} · 변주 · ${v.name}",
+        startPending(Pending(if (v.id in HARMONY) "${tracks.length() + 1}  화음 · ${HARMONY_LABEL[v.id]?.removePrefix("♪ ") ?: v.name}"
+                             else "${tracks.length() + 1}  ${instrumentLabel(tracks.getJSONObject(0).getString("instrument"))} · 변주 · ${v.name}",
                              if (v.id == "rewrite") listOf("허밍 동기 읽는 중…", "AI가 8마디 멜로디 쓰는 중…", "박자·음계 검사하는 중…", "연주하는 중…")
                              else if (v.id in HARMONY) listOf("마디 화음 읽는 중…", "둘째 목소리 고르는 중…", "연주하는 중…")
                              else listOf("음표 다듬는 중…", "연주하는 중…")))
@@ -4576,7 +4577,8 @@ class MainActivity : Activity() {
     }
 
     private fun instrumentLabel(name: String) =
-        INSTRUMENTS.firstOrNull { name.startsWith("GM ${it.second} ") }?.first ?: name.substringAfter(' ').substringAfter(' ')
+        INSTRUMENTS.firstOrNull { name.startsWith("GM ${it.second} ") }?.first
+            ?: if (name.startsWith("GM 71 ")) "클라리넷" else name.substringAfter(' ').substringAfter(' ')  // 화음 줄(아래, 원래가 첼로일 때)
 
     /** 조사 '로/으로': 받침이 있으면(ㄹ 받침 빼고) '으로'. 바이올린으로 · 첼로로. */
     private fun ro(word: String): String {

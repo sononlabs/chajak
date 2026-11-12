@@ -116,7 +116,7 @@ cd server
 |---|---|---|
 | `variation` | `harmony` 화음 멜로디(마디 화음에 맞춘 위 둘째 목소리) · `harmony_low` 아래 화음 멜로디(아래에서 받침) · `mood` 분위기 바꾸기 · `ornament` 꾸밈 넣기 · `bounce` 통통 튀게 · `inversion` 위아래 뒤집기 · `retrograde` 거꾸로 · `step_up` 한 단계 위로 · `finish` 멜로디 완성하기(음계·박자 맞춤 + 4마디 프레이즈 마침, 4마디 이하면 두 번 불러 8마디) | 필수 |
 | `source` | 변주할 트랙 번호 | `1` |
-| `instrument` | `/v1/instruments`의 값 | 원본 트랙 악기 |
+| `instrument` | `/v1/instruments`의 값 | 원본 트랙 악기. 화음 줄(`harmony`·`harmony_low`)은 다른 소리로 — 위 플루트·아래 첼로(원본이 그 악기면 바이올린·클라리넷), 멜로디 트랙보다 약 5dB 작게 |
 | `mode` | `overlay` · `append` | `harmony`·`harmony_low`는 겹치기, 나머지는 이어 붙이기 |
 | `accompaniment` | 화음+베이스 붙이기 | 이어 붙이기일 때만 `true`. 원본 트랙이 조성 이동됐으면 항상 반주 없음 |
 

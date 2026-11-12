@@ -343,7 +343,9 @@ async def variations(request):
 async def add_variation(request):
     """녹음 없이 이미 있는 트랙의 악보로 변주 트랙을 쌓는다(약 0.5초).
 
-    본문 JSON: {"variation", "source": 1, "instrument", "mode", "accompaniment"}. mode 를 빼면 변주에 어울리는 방식,
+    본문 JSON: {"variation", "source": 1, "instrument", "mode", "accompaniment"}. instrument 를 빼면 원래 트랙 악기
+    (화음 줄 harmony·harmony_low 는 다른 소리 — 위 플루트·아래 첼로, 원래가 그 악기면 바이올린·클라리넷, 조금 작게).
+    mode 를 빼면 변주에 어울리는 방식,
     accompaniment 를 빼면 이어 붙이기일 때만 반주를 붙인다. 원본 트랙을 조성 이동했으면 반주 없이 연주한다.
     """
     store: Store = request.app["store"]
@@ -360,7 +362,7 @@ async def _add_variation(request, store: Store, song: dict, body: dict):
     source = next((t for t in song["tracks"] if t["n"] == body.get("source", 1)), None)
     if source is None:
         raise ApiError(404, "NOT_FOUND", "변주할 트랙을 찾을 수 없어요.")
-    instrument = body.get("instrument", source["instrument"])
+    instrument = body.get("instrument") or C.harmony_instrument(variation, source["instrument"]) or source["instrument"]
     if instrument not in request.app["instruments"]:
         raise ApiError(400, "BAD_OPTION", "instrument 는 /v1/instruments 목록의 값이어야 해요.")
     accompaniment = bool(body.get("accompaniment", mode == "append")) and source["transpose"] == 0
@@ -376,7 +378,8 @@ async def _add_variation(request, store: Store, song: dict, body: dict):
                                                f"chajak_server/{song['id']}_{n}"), front=True)
         else:
             outputs = await cf.run(C.variation_graph(abc, variation, instrument, accompaniment, source["tempo"],
-                                                     source["transpose"], f"chajak_server/{song['id']}_{n}"), front=True)
+                                                     source["transpose"], f"chajak_server/{song['id']}_{n}",
+                                                     C.HARMONY_GAIN_DB if variation in C.HARMONY_INSTRUMENTS else -6.0), front=True)
             var_info = C.text(outputs, "var_info")
     except C.ComfyError as e:
         print(f"생성 엔진 오류: {e}", flush=True)
