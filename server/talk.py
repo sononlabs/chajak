@@ -18,6 +18,7 @@ import numpy as np
 import soundfile as sf
 
 import lyrics
+from engines import llm
 
 STT_MODEL = os.environ.get("CHAJAK_STT_MODEL", "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
 # auto: GPU 여유(3GB 이상)가 있으면 GPU, 아니면 CPU. 노래 엔진(YuE2·표지)이 GPU 를 쓰는 중일 수 있어 CPU 도 허용한다
@@ -198,11 +199,7 @@ class DigestError(Exception):
 
 async def _ask_long(session: aiohttp.ClientSession, prompt: str, seed: int) -> dict:
     """긴 대화용: 문맥 8천 토큰(기본 약 4천이면 15분 대화가 잘려 깨진 JSON 이 왔다 — 2026-11-10 실측). 마지막엔 모델을 내려 GPU 를 돌려준다."""
-    body = {"model": lyrics.MODEL, "stream": False, "format": "json", "think": False, "keep_alive": 0,
-            "options": {"temperature": 0.4, "seed": seed, "num_ctx": 8192}, "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(lyrics.OLLAMA + "/api/chat", json=body, timeout=aiohttp.ClientTimeout(total=300)) as r:
-        r.raise_for_status()
-        return json.loads((await r.json())["message"]["content"])
+    return await llm.chat_json(session, "talk", prompt, seed=seed, temperature=0.4, num_ctx=8192)
 
 
 async def digest(transcript: str, feeling: str, seed: int = 7, lines: list[str] | None = None) -> dict:

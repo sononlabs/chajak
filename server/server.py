@@ -27,6 +27,10 @@ import soundfile as sf
 from aiohttp import web
 
 import comfy as C
+import engines
+import engines.cover as CE
+import engines.song as SE
+from engines import llm
 import fine_melody
 import mastering
 import lyrics
@@ -271,8 +275,8 @@ async def _render_track(app, song_id: str, n: int, data: bytes, filename: str, i
 async def health(request):
     alive = await request.app["comfy"].alive()
     extra = request.app.get("extra_nodes", [])
-    return web.json_response({"ok": alive, "engine": "comfyui", "engine_alive": alive, "extra_custom_nodes": len(extra)},
-                             status=200 if alive else 503)
+    return web.json_response({"ok": alive, "engine": "comfyui", "engine_alive": alive, "extra_custom_nodes": len(extra),
+                              "engines": engines.summary()}, status=200 if alive else 503)
 
 
 async def instruments(request):
@@ -552,8 +556,7 @@ async def themes(request):
 
 
 FINAL_SECONDS = 120.0
-# 2026-11-05 실측(RTX 5070 Ti): 멜로디 1초 · 가사 15초 · 표지 23초(첫 로드 포함) · 노래 205초(곡 114초+8초) → 곡 1초당 약 1.7초.
-FINAL_ETA = lambda sec: round(40 + (sec + 8) * 1.7)
+# 예상 시간은 노래 엔진마다 다르다(engines/song.py 의 eta)
 
 
 VOICES = {"auto": "", "female": "female vocal", "male": "male vocal", "none": "",
@@ -613,6 +616,12 @@ async def start_final(request):
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
             "style_weight": int(min(100, max(0, int(body.get("style_weight", 50))))),
             "follow_mood": body.get("follow_mood", True) is not False}
+    # 노래 엔진: 비우면 엔진 설정(~/.chajak/engines.json)의 song. 비교 시험(bench_engines.py)은 요청마다 이름을 준다.
+    # 작업을 만들 때 이름을 정해 두어, 도중에 설정을 바꿔도 이 작업은 같은 엔진으로 끝난다
+    try:
+        opts["engine"] = SE.get(str(body.get("engine", "")).strip() or None).name
+    except engines.EngineError as e:
+        raise ApiError(400, "BAD_OPTION", str(e))
     if opts["voice"].startswith("rap"):  # 랩은 허밍 악보를 따르게 하면 노래처럼 불렀다(초당 2.2자) — 악보 없이, 멜로디 느낌 장르도 쓰지 않는다
         opts["melody_weight"] = min(opts["melody_weight"], 20)
         opts["follow_mood"] = False
@@ -632,7 +641,7 @@ async def start_final(request):
         raise ApiError(400, "BAD_OPTION", "말로 고치기는 바탕이 될 노래 버전(from)이 있어야 해요.")
     job_id = uuid.uuid4().hex[:12]
     job = {"id": job_id, "song_id": song["id"], "kind": "final", "status": "queued", "stage": "melody", "prompt": prompt,
-           "options": opts, "from": base["id"] if base else None, "eta_sec": FINAL_ETA(opts["seconds"]), "created": time.time(),
+           "options": opts, "from": base["id"] if base else None, "eta_sec": SE.get(opts["engine"]).eta(opts["seconds"]), "created": time.time(),
            "_remix": remix}
     request.app["jobs"][job_id] = job
     job["_task"] = _spawn(request.app, (_run_final(request.app, job, song)))
@@ -710,6 +719,8 @@ async def _run_final_now(app, job: dict, song: dict):
     base = remix["base"]
     job["status"] = "running"
     try:
+        engine = SE.get(opts["engine"])
+        cover_engine = None
         if remix.get("edit"):
             # 말로 고치기(작업 종류는 모델이 고른다): 요청 한 문장 → 설정 변경 → 무엇을 바꿨는지 한 줄로 알린다
             job["stage"] = "edit"
@@ -749,7 +760,7 @@ async def _run_final_now(app, job: dict, song: dict):
         lyr_plan = lyrics.rap_plan(plan["seconds"]) if rap else plan
         mood = _melody_mood(src, first) if opts.get("follow_mood", True) and not rap else None
         job["mood"] = _mood_view(mood)
-        job.update(stage="lyrics", eta_sec=FINAL_ETA(plan["seconds"]), seconds=plan["seconds"])
+        job.update(stage="lyrics", eta_sec=engine.eta(plan["seconds"]), seconds=plan["seconds"])
         if remix["lyrics"]:
             sections, dropped = lyrics.normalize_sections(remix["lyrics"], lyr_plan)
             if dropped:
@@ -776,7 +787,7 @@ async def _run_final_now(app, job: dict, song: dict):
         style = _style(words["style"] if rap else (remix["style"] or words["style"]), opts["voice"])
         # 만드는 동안 먼저 보여 줄 것(첫 결과가 준비되면 알린다) — 노래를 기다리는 3분이 덜 지루하게
         job.update(stage="cover", title=words["title"], lyrics=words["sections"] if sung else {}, style=style)
-        cover_file, audio_file = f"cover_{job['id']}.png", f"final_{job['id']}.flac"
+        cover_file = f"cover_{job['id']}.png"
         if remix["keep_cover"] and base:
             cover_file = base.get("cover", "cover.png")
         else:
@@ -784,20 +795,27 @@ async def _run_final_now(app, job: dict, song: dict):
             # 글자 금지 지시는 사용자에게 보이지 않게 앞뒤로 붙인다(사용자 요청).
             scene = _cover_scene(words["cover"] or "") or "a quiet road at night seen through a car windshield"
             cover_prompt = f"{COVER_NO_TEXT}. {scene}. album cover art, square composition, cinematic soft light, painterly illustration. {COVER_NO_TEXT}"
-            out = await cf.run(C.cover_graph(cover_prompt, seed, f"chajak_server/{song['id']}_cover"))
-            (d / cover_file).write_bytes(await cf.fetch_image(out, "save"))
-            await cf.free()  # 표지 모델을 내리고 노래 모델을 올린다(둘 다 올라가 있으면 VRAM 이 넘쳐 노래가 몇십 분씩 걸렸다)
+            cover_engine = CE.get()
+            (d / cover_file).write_bytes(await cover_engine.draw(cf, cover_prompt, seed, f"chajak_server/{song['id']}_cover"))
+            if cover_engine.gpu:
+                await cf.free()  # 표지 모델을 내리고 노래 모델을 올린다(둘 다 올라가 있으면 VRAM 이 넘쳐 노래가 몇십 분씩 걸렸다)
         job["_cover"] = str(d / cover_file)
         job["cover_url"] = f"/v1/jobs/{job['id']}/cover"
         job["stage"] = "music"
-        out = await cf.run(C.final_graph(abc if w["use_abc"] else "", style, text, seed, plan["seconds"] + 8,
-                                         f"chajak_server/{song['id']}_final", w["temperature"], w["cfg_scale"]))
-        raw = await cf.fetch_audio(out, "save")
-        try:  # 앞 25ms 페이드 인 · 끝 페이드 아웃 · 최대 음량 -1dBFS(처음 지지직·잘림 방지, 2026-11-11)
+        # 멜로디를 받지 않는 엔진(주제로만 만드는 API)에는 악보를 넘기지 않는다
+        use_abc = w["use_abc"] and engine.caps["melody"] is not None
+        made = await engine.generate(cf, SE.SongRequest(
+            abc=abc if use_abc else "", style=style, lyrics=text, sections=words["sections"] if sung else {}, plan=plan,
+            seconds=plan["seconds"] + 8, seed=seed, temperature=w["temperature"], cfg_scale=w["cfg_scale"],
+            prefix=f"chajak_server/{song['id']}_final"))
+        raw, ext = made.audio, made.ext
+        try:  # 앞 25ms 페이드 인 · 끝 페이드 아웃 · 최대 음량 -1dBFS(처음 지지직·잘림 방지, 2026-11-11). 결과는 FLAC
             raw, mst = await asyncio.get_running_loop().run_in_executor(None, mastering.master, raw)
             job["mastering"] = mst
+            ext = "flac"
         except Exception as e:
             print("다듬기 실패(원본 저장):", e, flush=True)
+        audio_file = f"final_{job['id']}.{ext}"
         (d / audio_file).write_bytes(raw)
         # 곡을 다시 읽어 버전을 붙인다 — 만드는 동안 쌓은 트랙을 지우지 않게, 잠근 채로
         async with store.lock(song["id"]):
@@ -809,6 +827,9 @@ async def _run_final_now(app, job: dict, song: dict):
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
                      "file": audio_file, "cover": cover_file, "created": _now_iso(), "abc": abc,
                      "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
+                     # 어떤 엔진으로 만들었는지(엔진 비교·다시 만들기 추적). 표지를 지킨 다시 만들기는 표지 엔진 없음
+                     "engines": {"song": engine.name, "song_info": made.info, "melody_used": use_abc,
+                                 "cover": cover_engine.name if cover_engine else None, "lyrics": llm.describe("lyrics")},
                      "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
                      "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]

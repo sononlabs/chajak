@@ -29,6 +29,27 @@ cd server
 - 실측(RTX 5070 Ti 16GB, 에뮬레이터 두 대 켠 채): 노래 약 165초, 랩 약 270초. 다른 GPU 작업(VRAM 4GB+계산)을 함께 하면 250~390초로 느려지지만 끝난다.
 - 노래 도중 ComfyUI 가 다시 켜지면 서버가 최대 300초 기다렸다가 작업을 한 번 다시 넣는다.
 
+## 엔진 바꿔 끼우기 · 비교 시험 (2026-11-13)
+
+단계마다 쓰는 모델은 `engines/` 가 고른다. 설정은 `~/.chajak/engines.json`(저장소 밖 — API 키가 들어갈 수 있다)이고, 요청마다 다시 읽어 서버를 다시 켜지 않아도 바뀐다. 파일이 없으면 지금 구성 그대로다.
+
+```json
+{"song": "yue2", "cover": "zimage",
+ "llm": {"lyrics": "ollama/gemma3:12b", "talk": "ollama/gemma3:12b", "melody": "ollama/qwen3:14b"},
+ "keys": {}}
+```
+
+| 단계 | 파일 | 지금 있는 엔진 | 새 엔진 더하기 |
+|---|---|---|---|
+| 노래 | `engines/song.py` | `yue2` | `SongEngine` 을 이어받아 `generate` 하나 + `caps`(멜로디를 받는지 등) |
+| 표지 | `engines/cover.py` | `zimage`, `qwen2512` | `CoverEngine.draw` |
+| 가사·대화 요약·멜로디 다시 쓰기 | `engines/llm.py` | `ollama/<모델>` | `_BACKENDS` 에 함수 하나 |
+
+- 노래 만들기 요청에 `"engine": "<이름>"` 을 주면 그 엔진으로 만든다(없는 이름은 400). 완성곡 기록 `engines` 에 노래·표지·가사 엔진과 멜로디를 넘겼는지가 남는다. `GET /health` 의 `engines` 로 지금 설정을 본다.
+- 멜로디를 받지 않는 엔진(`caps.melody = None`)에는 곡 악보를 넘기지 않는다.
+- 비교 시험: `python bench_engines.py --engines yue2,<새 엔진> [--hum a.wav b.wav] [--seconds 60]` — 같은 허밍·같은 가사·같은 표지로 엔진만 바꿔 만들고, 걸린 시간·길이·**멜로디 F1**(결과를 SheetSage2 로 다시 받아 적어 넘긴 악보와 비교)·**가사 CER**(whisper 로 받아 적어 부른 순서의 가사와 비교)을 `결과.md`·`결과.json` 에, 엔진 이름을 가린 듣기용 파일과 `답지.json` 을 함께 남긴다. 시험 곡은 끝나면 지운다(`--keep` 이면 남김).
+- 2026-11-13 첫 실행(YuE2, 허밍 1개, 60초 곡): 만드는 데 156초 · 노래 70.8초 · 멜로디 F1 0.819(전주 7.3초 뒤, 한 옥타브 아래) · 가사 CER 0.067.
+
 ## API
 
 모든 오류는 `{"error": {"code": "...", "message": "..."}}` 형식입니다. `message`는 앱 화면에 그대로 띄울 수 있는 문장입니다.

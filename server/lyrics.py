@@ -1,4 +1,4 @@
-"""주제(프롬프트) → 노래 제목 · 스타일 태그 · 가사. 이 PC 의 Ollama(gemma3:12b, CHAJAK_LYRICS_MODEL)로 만든다(외부 API 없음).
+"""주제(프롬프트) → 노래 제목 · 스타일 태그 · 가사. LLM 은 엔진 설정의 llm.lyrics(기본: 이 PC 의 Ollama gemma3:12b — engines/llm.py).
 
 가사 줄 수·줄마다 음절 목표는 2분 곡 계획(PleosSongForm plan)에서 온다: 2마디가 가사 한 줄, 그 2마디 음 개수가 음절 목표.
 한국어는 한 음에 한 음절이 기본이라 음절 수를 맞추면 노래가 멜로디에 잘 붙는다.
@@ -8,16 +8,14 @@ from __future__ import annotations
 
 import json
 import re
-import os
 import random
 
 import aiohttp
 
 import melody_mood
+from engines import llm
 
-OLLAMA = os.environ.get("CHAJAK_OLLAMA", "http://127.0.0.1:11434")
-# 2026-11-06 비교: gemma3:12b 가 한국어 가사·말로 바꾸기 모두 qwen3:14b·exaone3.5 보다 자연스러움
-MODEL = os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b")
+# 2026-11-06 비교: gemma3:12b 가 한국어 가사·말로 바꾸기 모두 qwen3:14b·exaone3.5 보다 자연스러움(엔진 기본값)
 
 # 주사위 주제(직접 쓴 문장). 차 안 상황 + 분위기 + 장르.
 THEMES = [
@@ -104,12 +102,8 @@ def _line(x) -> str:
 
 
 async def _ask(session: aiohttp.ClientSession, prompt: str, seed: int, keep: str | int = 0, temperature: float = 0.8) -> dict:
-    """keep: 모델을 메모리에 둘 시간. 여러 번 연달아 부를 때는 "2m", 마지막엔 0(노래 엔진에 GPU 를 돌려준다)."""
-    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "keep_alive": keep,
-            "options": {"temperature": temperature, "seed": seed}, "messages": [{"role": "user", "content": prompt}]}
-    async with session.post(OLLAMA + "/api/chat", json=body, timeout=aiohttp.ClientTimeout(total=300)) as r:
-        r.raise_for_status()
-        return json.loads((await r.json())["message"]["content"])
+    """keep: 로컬 모델을 메모리에 둘 시간. 여러 번 연달아 부를 때는 "2m", 마지막엔 0(노래 엔진에 GPU 를 돌려준다)."""
+    return await llm.chat_json(session, "lyrics", prompt, seed=seed, temperature=temperature, keep_alive=keep)
 
 
 # 글자 수 허용 범위: 목표보다 1 적게 ~ 2 많게. 노래는 한 음에 두 글자를 붙여 부를 수 있어서,
@@ -589,12 +583,7 @@ async def write(theme: str, plan: dict, seed: int, mood: dict | None = None, tal
             sections = await _polish(session, theme, sections, targets, seed + 20)
         finally:
             # 노래 엔진(YuE2)이 GPU 를 쓰도록 작사 모델을 내린다
-            try:
-                async with session.post(OLLAMA + "/api/generate", json={"model": MODEL, "keep_alive": 0},
-                                        timeout=aiohttp.ClientTimeout(total=30)) as r:
-                    await r.read()
-            except Exception:
-                pass
+            await llm.release(session, "lyrics")
     return {"title": str(story.get("title", "")).strip() or theme.split(",")[0],
             "style": str(story.get("style", "")).strip(), "cover": str(story.get("cover", "")).strip(),
             "sections": _unpair(sections, groups), "miss": round(_miss(sections, targets), 2),

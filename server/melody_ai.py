@@ -1,6 +1,6 @@
 """허밍 멜로디를 '참고만' 해서 더 좋은 8마디 멜로디로 다시 쓴다(멜로디가 단순할 때).
 
-이 PC 의 Ollama(qwen3:14b)에게 허밍 앞 4마디를 음계 칸(도=0, 레=1 … 한 옥타브 위 도=7)과 박 길이로 주고,
+LLM(엔진 설정 llm.melody, 기본 이 PC 의 Ollama qwen3:14b)에게 허밍 앞 4마디를 음계 칸(도=0, 레=1 … 한 옥타브 위 도=7)과 박 길이로 주고,
 첫 동기의 리듬은 살리되 발전(반복·한 칸 위로·뒤집기)·절정(6~7마디)·으뜸음 마침이 있는 8마디를 쓰게 한다.
 마디마다 4박이 맞는지, 음계 칸 범위·도약 크기를 검사해 고치고, 두 번 다 실패하면 규칙(멜로디 완성하기)으로 대신한다.
 ABC 해석·쓰기는 ComfyUI 노드 패키지 모듈을 그대로 쓴다(melody_notes 와 같은 방식).
@@ -10,16 +10,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 import types
 
 import aiohttp
 
-from lyrics import OLLAMA
-
-# 가사는 gemma3 로 바꿨지만(한국어), 음계 숫자 다루기는 지금까지 시험한 qwen3 를 그대로 쓴다
-MODEL = os.environ.get("CHAJAK_MELODY_MODEL", "qwen3:14b")
+from engines import llm
+# 가사는 gemma3 로 바꿨지만(한국어), 음계 숫자 다루기는 지금까지 시험한 qwen3 를 그대로 쓴다(엔진 기본값 llm.melody)
 from melody_notes import NODES
 
 _pkg = types.ModuleType("pleos_nodes")
@@ -103,17 +100,13 @@ async def rewrite(abc: str, seed: int) -> tuple[str, str]:
     unit_beats = parsed.unit * float(parsed.meter[1] or 4)
     bar_units = round(parsed.meter[0] / unit_beats)
     key = parsed.key.split()[0] if parsed.key else "C"
-    body = {"model": MODEL, "stream": False, "format": "json", "think": False, "keep_alive": 0,
-            "options": {"temperature": 0.9, "seed": seed}, "messages": [{"role": "user", "content": _prompt(bars, minor)}]}
     async with aiohttp.ClientSession() as session:
         for attempt in range(2):
-            body["options"]["seed"] = seed + attempt
-            async with session.post(OLLAMA + "/api/chat", json=body, timeout=aiohttp.ClientTimeout(total=300)) as r:
-                r.raise_for_status()
-                try:
-                    fixed = _fix(json.loads((await r.json())["message"]["content"]).get("bars"))
-                except (json.JSONDecodeError, AttributeError):
-                    fixed = None
+            try:
+                out = await llm.chat_json(session, "melody", _prompt(bars, minor), seed=seed + attempt, temperature=0.9)
+                fixed = _fix(out.get("bars"))
+            except (json.JSONDecodeError, AttributeError):
+                fixed = None
             if fixed:
                 notes, t = [], 0.0
                 for bar in fixed:

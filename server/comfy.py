@@ -324,13 +324,12 @@ COVER_VAE = "z_image_ae.safetensors"
 # 곡 끝까지 재 보니(노래 모델 YuE2 와 교대 포함) 표지 15→19초, 곡 전체 약 159→161초.
 # 2026-11-10 안정성 시험 뒤 기본을 다시 Z-Image 로: Qwen 은 본체 19.5GB+글 모델 7.9GB 로 VRAM 16GB 를 넘겨 나눠 올리므로,
 # 사용자가 다른 GPU 작업을 하거나 에뮬레이터가 VRAM 을 잡고 있으면 가장 먼저 느려진다(Z-Image 는 4.3GB+5.4GB).
-# 시연 품질을 우선하려면 CHAJAK_COVER_MODEL=qwen2512
-COVER_MODEL = os.environ.get("CHAJAK_COVER_MODEL", "zimage")
+# 시연 품질을 우선하려면 엔진 설정 cover 를 qwen2512 로(engines/cover.py, 예전 환경변수 CHAJAK_COVER_MODEL 도 기본값으로 따른다)
 
 
-def cover_graph(prompt: str, seed: int, prefix: str) -> dict:
+def cover_graph(prompt: str, seed: int, prefix: str, model: str = "zimage") -> dict:
     """앨범 표지: Z-Image Turbo(8단계) 또는 Qwen-Image-2512(4단계). 글자 없는 정사각형 그림."""
-    if COVER_MODEL == "qwen2512":
+    if model == "qwen2512":
         return cover_graph_qwen(prompt, seed, prefix)
     return {
         "unet": {"class_type": "UNETLoader", "inputs": {"unet_name": COVER_UNET, "weight_dtype": "default"}},
