@@ -253,10 +253,15 @@ def tile_audio(x, sr, min_seconds=12.0, max_repeats=12, crossfade=0.0):
 # 전체 파이프라인
 # --------------------------------------------------------------------------- #
 def prepare_hum(x, sr, denoise=True, target_db=-22.0, min_seconds=12.0,
-                vad_margin_hi=18.0, vad_margin_lo=10.0, merge_gap=0.30,
-                min_dur=0.30, pad=0.10, gap=0.15, max_repeats=12,
+                vad_margin_hi=18.0, vad_margin_lo=10.0, merge_gap=3.0,
+                min_dur=0.30, pad=0.30, gap=0.50, max_repeats=12,
                 do_extract=True, do_normalize=True):
     """마이크 녹음 -> 전사 가능한 허밍 오디오.
+
+    음성 구간 찾기는 앞뒤 무음과 3초 넘는 멈춤만 잘라낸다(앞뒤 0.3초 여유, 긴 멈춤은 0.5초로).
+    여유를 1초로 두면 소리가 짧은 녹음(40초 중 2초)에서 무음이 더 많아져 SheetSage2 가 음을 못 찾았다.
+    전에는 0.3초 넘는 쉼을 모두 0.15초로 줄여 붙였는데, 쉼표가 사라져 박자가 망가지고 약한 음이 잘렸다
+    — 합성 허밍 48개 시험(2026-11-12, 문서 48)에서 SheetSage2 음표 F1 0.73~0.80, 쉼을 그대로 두면 0.92~0.97.
 
     Returns (오디오 ndarray, 진단 dict)
     """
