@@ -1,7 +1,6 @@
 """노래 엔진 비교 시험(52번 문서 4장) — 같은 허밍·같은 가사로 엔진마다 노래를 만들어 나란히 듣고 잰다.
 
-    <ComfyUI venv python> bench_engines.py --engines yue2,yue2+acc,mureka [--hum a.wav b.wav] [--seconds 60] [--voice female]
-    ("+acc" 를 붙이면 그 엔진으로 만든 뒤 반주만 Mureka 로 다시 만든다 — engines/accomp.py)
+    <ComfyUI venv python> bench_engines.py --engines yue2,mureka [--hum a.wav b.wav] [--seconds 60] [--voice female]
                                            [--prompt "주제"] [--out 폴더] [--keep] [--no-metrics]
 
 흐름(곡마다): 허밍으로 시험 곡 만들기 → 첫 엔진으로 노래(가사·표지 새로) → 나머지 엔진은 그 버전을 바탕으로
@@ -194,8 +193,7 @@ async def main(a):
                 base = None
                 random.shuffle(letters)
                 for engine, letter in zip(engines_, letters):
-                    name, _, extra = engine.partition("+")   # "yue2+acc" = YuE2 로 만들고 반주만 Mureka 로 다시
-                    body = {**common, "engine": name, "accompaniment": "mureka" if extra == "acc" else "none"}
+                    body = {**common, "engine": engine}
                     if base:  # 같은 가사·표지·곡 구성으로 엔진만 바꾼다
                         body |= {"from": base["id"], "keep_lyrics": True, "keep_cover": True}
                     t0 = time.time()
@@ -208,7 +206,7 @@ async def main(a):
                     base = base or fin
                     data = await audio(s, fin["audio_url"])
                     ext = Path(fin.get("file", "x.flac")).suffix or ".flac"
-                    (out_dir / f"곡{i}_{engine.replace('+', '_')}{ext}").write_bytes(data)
+                    (out_dir / f"곡{i}_{engine}{ext}").write_bytes(data)
                     blind = f"곡{i}_{letter}{ext}"
                     (out_dir / blind).write_bytes(data)
                     answer[blind] = engine

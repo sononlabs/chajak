@@ -28,7 +28,6 @@ from aiohttp import web
 
 import comfy as C
 import engines
-import engines.accomp as ACC
 import engines.cover as CE
 import engines.song as SE
 from engines import llm
@@ -630,8 +629,6 @@ async def start_final(request):
         opts["engine"] = SE.get(name).name
     except engines.EngineError as e:
         raise ApiError(400, "BAD_OPTION", str(e))
-    # 반주 다시 만들기(노래를 만든 뒤 보컬만 남기고 반주를 새로): 비우면 설정의 accompaniment. 비교 시험은 요청마다 준다
-    opts["accompaniment"] = _option(body, "accompaniment", ACC.NAMES, ACC.default())
     if body.get("talk"):  # 대화로 가사 만들기: /v1/talk 가 정리해 준 이야기를 가사에 넣는다
         opts["talk"] = T.sanitize(body.get("talk"))
     # 다시 만들기: 이전 버전을 바탕으로 가중치·주제·가사·스타일만 바꾼다
@@ -838,16 +835,6 @@ async def _run_final_now(app, job: dict, song: dict):
             job["eta_sec"] = round(time.time() - job["created"]) + engine.eta(plan["seconds"]) - 40  # 곡 구성·가사·표지는 이미 끝남
             made = await engine.generate(cf, req)
         raw, ext = made.audio, made.ext
-        # 반주 다시 만들기: 멜로디를 따라 부르는 로컬 엔진(YuE2)의 보컬은 두고 반주만 바꾼다. 실패하면 원래 곡 그대로
-        acc_info = None
-        # (앱 진행 표시는 '노래 부르는 중' 그대로 — 앱 단계 이름표에 새 단계가 없다)
-        if opts.get("accompaniment", "none") != "none" and sung and engine.name == "yue2":
-            try:
-                raw, acc_info = await ACC.redo(raw, style, opts["accompaniment"])
-                ext = "flac"
-            except Exception as e:
-                acc_info = {"error": f"{type(e).__name__}: {e}"[:300]}
-                print("반주 다시 만들기 실패(원래 곡으로):", acc_info["error"], flush=True)
         try:  # 앞 25ms 페이드 인 · 끝 페이드 아웃 · 최대 음량 -1dBFS(처음 지지직·잘림 방지, 2026-11-11). 결과는 FLAC
             raw, mst = await asyncio.get_running_loop().run_in_executor(None, mastering.master, raw)
             job["mastering"] = mst
@@ -869,7 +856,7 @@ async def _run_final_now(app, job: dict, song: dict):
                      # 어떤 엔진으로 만들었는지(엔진 비교·다시 만들기 추적). 표지를 지킨 다시 만들기는 표지 엔진 없음
                      "engines": {"song": engine.name, "song_info": made.info, "melody_used": use_abc,
                                  "cover": cover_engine.name if cover_engine else None, "lyrics": llm.describe("lyrics"),
-                                 "accompaniment": acc_info, "fallback": fallback},
+                                 "fallback": fallback},
                      "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
                      "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]
