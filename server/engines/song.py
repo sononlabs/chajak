@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import re
 from dataclasses import dataclass, field
 
 import comfy as C
@@ -61,7 +63,108 @@ class Yue2(SongEngine):
         return SongResult(await cf.fetch_audio(out, "save"), "flac", {"model": "yue2_3b_int8_convrot"})
 
 
-_ENGINES: dict[str, type[SongEngine]] = {"yue2": Yue2}
+class Mureka(SongEngine):
+    """Mureka API(Kunlun) — 가사 → 노래. 곡 악보가 있으면 앞 60초 멜로디를 MIDI 로 올려(files/upload purpose=melody) 따라 부르게 한다.
+    공식 문서(2026-11-13 확인): melody_id 는 다른 조절(prompt·reference·vocal)과 함께 쓸 수 없다 → 멜로디가 있으면 스타일 글 없이 성별만.
+    n 은 곡 수만큼 돈이 나가 1 로. duration 은 mureka-9.5 만, 120~300초. 값: 9.5 곡당 $0.15(요금 페이지)."""
+    name = "mureka"
+    caps = {"melody": "60s", "style": True, "seed": False, "gpu": False}
+    API = "https://api.mureka.ai"
+    MODEL = "mureka-9.5"
+    MELODY_MAX_SEC = 58.0
+    TAGS = {"verse": "Verse", "chorus": "Chorus", "bridge": "Bridge", "intro": "Intro", "outro": "Outro", "pre-chorus": "Pre-Chorus"}
+
+    def eta(self, seconds: float) -> int:
+        return round(60 + 90)  # 곡 구성·가사·표지 약 60초 + 생성(첫 시험 전 어림)
+
+    async def generate(self, cf, req):
+        import aiohttp
+        from . import key
+        headers = {"Authorization": "Bearer " + key("mureka")}
+        lyrics = re.sub(r"\[([a-z\-]+)\d*\]", lambda m: f"[{self.TAGS.get(m.group(1), m.group(1).title())}]", req.lyrics)
+        body = {"lyrics": lyrics[:5000], "model": self.MODEL, "n": 1}
+        gender = "female" if "female" in req.style.lower() else ("male" if "male vocal" in req.style.lower() else None)
+        if gender:
+            body["gender"] = gender
+        if req.seconds >= 120:
+            body["duration"] = int(min(300, req.seconds))
+        info = {"model": self.MODEL}
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as s:
+            midi = _melody_midi(req.abc, self.MELODY_MAX_SEC) if req.abc else None
+            if midi:
+                form = aiohttp.FormData()
+                form.add_field("purpose", "melody")
+                form.add_field("file", midi, filename="melody.mid", content_type="audio/midi")
+                async with s.post(self.API + "/v1/files/upload", data=form) as r:
+                    up = await _ok(r)
+                body["melody_id"] = up["id"]
+                info["melody_id"] = up["id"]
+            else:
+                body["prompt"] = req.style[:1024]
+            async with s.post(self.API + "/v1/song/generate", json=body) as r:
+                task = await _ok(r)
+            info["task_id"] = task["id"]
+            for _ in range(200):  # 3초 × 200 = 10분
+                if task.get("status") in ("succeeded", "failed", "timeouted", "cancelled"):
+                    break
+                await asyncio.sleep(3)
+                async with s.get(f"{self.API}/v1/song/query/{task['id']}") as r:
+                    task = await _ok(r)
+            if task.get("status") != "succeeded" or not task.get("choices"):
+                raise EngineError(f"Mureka 노래 실패({task.get('status')}): {task.get('failed_reason', '')}")
+            choice = task["choices"][0]
+            info |= {"song_id": choice.get("id"), "duration_ms": choice.get("duration"), "lyrics_sections": choice.get("lyrics_sections")}
+            url = choice.get("flac_url") or choice.get("url")
+            async with s.get(url, timeout=aiohttp.ClientTimeout(total=300)) as r:
+                r.raise_for_status()
+                data = await r.read()
+        return SongResult(data, "flac" if url == choice.get("flac_url") else "mp3", info)
+
+
+async def _ok(r) -> dict:
+    j = await r.json(content_type=None)
+    if r.status >= 400:
+        raise EngineError(f"Mureka API {r.status}: {j}")
+    return j
+
+
+def _melody_midi(abc: str, max_sec: float) -> bytes | None:
+    """곡 악보의 멜로디(best_voice) → 단일 트랙 MIDI(SMF 0). 첫 음부터 max_sec 초까지. 의존성 없이 직접 쓴다."""
+    import melody_notes
+    tempo, _ = C.abc_header(abc)
+    notes = melody_notes.notes({"abc": abc, "tempo": tempo})
+    if not notes:
+        return None
+    t0 = notes[0]["start"]
+    ppq, sec_per_tick = 480, 60.0 / tempo / 480
+    events = []
+    for n in notes:
+        a = n["start"] - t0
+        if a >= max_sec:
+            break
+        b = min(a + n["dur"], max_sec)
+        events += [(round(a / sec_per_tick), 0x90, n["midi"], 96), (round(b / sec_per_tick), 0x80, n["midi"], 0)]
+    events.sort(key=lambda e: (e[0], e[1] == 0x90))  # 같은 때는 끄기 먼저
+
+    def vlq(v: int) -> bytes:
+        out = [v & 0x7F]
+        while v > 0x7F:
+            v >>= 7
+            out.insert(0, (v & 0x7F) | 0x80)
+        return bytes(out)
+
+    us = round(60_000_000 / tempo)
+    trk = bytearray(b"\x00\xff\x51\x03" + us.to_bytes(3, "big"))
+    now = 0
+    for tick, kind, pitch, vel in events:
+        trk += vlq(tick - now) + bytes([kind, max(0, min(127, pitch)), vel])
+        now = tick
+    trk += b"\x00\xff\x2f\x00"
+    return b"MThd" + (6).to_bytes(4, "big") + (0).to_bytes(2, "big") + (1).to_bytes(2, "big") + ppq.to_bytes(2, "big") + \
+        b"MTrk" + len(trk).to_bytes(4, "big") + bytes(trk)
+
+
+_ENGINES: dict[str, type[SongEngine]] = {"yue2": Yue2, "mureka": Mureka}
 
 
 def names() -> list[str]:

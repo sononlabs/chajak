@@ -41,7 +41,7 @@ cd server
 
 | 단계 | 파일 | 지금 있는 엔진 | 새 엔진 더하기 |
 |---|---|---|---|
-| 노래 | `engines/song.py` | `yue2` | `SongEngine` 을 이어받아 `generate` 하나 + `caps`(멜로디를 받는지 등) |
+| 노래 | `engines/song.py` | `yue2`, `mureka`(Mureka API — 키 `keys.mureka`, 곡 악보 앞 58초를 MIDI 로 올려 멜로디 아이디어로. 멜로디를 주면 스타일 글은 못 줌 — 공식 문서) | `SongEngine` 을 이어받아 `generate` 하나 + `caps`(멜로디를 받는지 등) |
 | 표지 | `engines/cover.py` | `zimage`, `qwen2512` | `CoverEngine.draw` |
 | 가사·대화 요약·멜로디 다시 쓰기 | `engines/llm.py` | `ollama/<모델>` | `_BACKENDS` 에 함수 하나 |
 
@@ -49,6 +49,7 @@ cd server
 - 멜로디를 받지 않는 엔진(`caps.melody = None`)에는 곡 악보를 넘기지 않는다.
 - 비교 시험: `python bench_engines.py --engines yue2,<새 엔진> [--hum a.wav b.wav] [--seconds 60]` — 같은 허밍·같은 가사·같은 표지로 엔진만 바꿔 만들고, 걸린 시간·길이·**멜로디 F1**(결과를 SheetSage2 로 다시 받아 적어 넘긴 악보와 비교)·**가사 CER**(whisper 로 받아 적어 부른 순서의 가사와 비교)을 `결과.md`·`결과.json` 에, 엔진 이름을 가린 듣기용 파일과 `답지.json` 을 함께 남긴다. 시험 곡은 끝나면 지운다(`--keep` 이면 남김).
 - 2026-11-13 첫 실행(YuE2, 허밍 1개, 60초 곡): 만드는 데 156초 · 노래 70.8초 · 멜로디 F1 0.819(전주 7.3초 뒤, 한 옥타브 아래) · 가사 CER 0.067.
+- 2026-11-13 YuE2 ↔ Mureka(같은 허밍·가사·표지, 60초 설정): YuE2 154초 · 70.8초 · 멜로디 F1 0.87 · 가사 CER 0.095 / Mureka 35초 · 83초 · 멜로디 F1 0.12 · 가사 CER 0.60(가사는 그대로 불렀다 — Mureka 가 돌려준 가사 줄이 우리 가사와 같음). Mureka 의 멜로디 업로드는 '따라 부르기'가 아니라 '아이디어'로 쓰인다(전주 18초 뒤 새 구성). 곡당 $0.15.
 
 ## API
 
