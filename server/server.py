@@ -818,10 +818,25 @@ async def _run_final_now(app, job: dict, song: dict):
         job["stage"] = "music"
         # 멜로디를 받지 않는 엔진(주제로만 만드는 API)에는 악보를 넘기지 않는다
         use_abc = w["use_abc"] and engine.caps["melody"] is not None
-        made = await engine.generate(cf, SE.SongRequest(
+        req = SE.SongRequest(
             abc=abc if use_abc else "", style=style, lyrics=text, sections=words["sections"] if sung else {}, plan=plan,
             seconds=plan["seconds"] + 8, seed=seed, temperature=w["temperature"], cfg_scale=w["cfg_scale"],
-            prefix=f"chajak_server/{song['id']}_final"))
+            prefix=f"chajak_server/{song['id']}_final")
+        fallback = None
+        try:
+            made = await engine.generate(cf, req)
+        except Exception as e:
+            # 외부 엔진이 실패하면(잔액·호출 한도·키·시간 초과·장애) 같은 노래를 로컬 YuE2 로 다시 만든다(2026-11-14 사용자).
+            # 취소(CancelledError)는 Exception 이 아니라 여기서 잡히지 않는다
+            if engine.name == SE.FALLBACK:
+                raise
+            fallback = {"from": engine.name, "reason": f"{type(e).__name__}: {e}"[:300]}
+            print(f"노래 엔진 {engine.name} 실패 → {SE.FALLBACK} 로 다시: {fallback['reason']}", flush=True)
+            engine = SE.get(SE.FALLBACK)
+            use_abc = w["use_abc"] and engine.caps["melody"] is not None
+            req.abc = abc if use_abc else ""
+            job["eta_sec"] = round(time.time() - job["created"]) + engine.eta(plan["seconds"]) - 40  # 곡 구성·가사·표지는 이미 끝남
+            made = await engine.generate(cf, req)
         raw, ext = made.audio, made.ext
         # 반주 다시 만들기: 멜로디를 따라 부르는 로컬 엔진(YuE2)의 보컬은 두고 반주만 바꾼다. 실패하면 원래 곡 그대로
         acc_info = None
@@ -854,7 +869,7 @@ async def _run_final_now(app, job: dict, song: dict):
                      # 어떤 엔진으로 만들었는지(엔진 비교·다시 만들기 추적). 표지를 지킨 다시 만들기는 표지 엔진 없음
                      "engines": {"song": engine.name, "song_info": made.info, "melody_used": use_abc,
                                  "cover": cover_engine.name if cover_engine else None, "lyrics": llm.describe("lyrics"),
-                                 "accompaniment": acc_info},
+                                 "accompaniment": acc_info, "fallback": fallback},
                      "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
                      "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]

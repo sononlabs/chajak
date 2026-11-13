@@ -46,6 +46,7 @@ cd server
 | 가사·대화 요약·멜로디 다시 쓰기 | `engines/llm.py` | `ollama/<모델>` | `_BACKENDS` 에 함수 하나 |
 
 - `song_new`: "내 멜로디: AI가 새로"(멜로디 없이, 랩·연주곡 빼고) 노래만 다른 엔진으로(예: `"mureka"` — 멜로디를 따르지 않는 엔진도 이 모드엔 맞다). 2026-11-14 부터 이 PC 설정은 `mureka`.
+- **자동 대체:** 외부 노래 엔진(Mureka 등)이 실패하면(잔액·호출 한도·키·시간 초과·장애) 같은 요청을 로컬 `yue2` 로 다시 만든다. 완성곡 기록 `engines.fallback` 에 `{"from", "reason"}`. 2026-11-14 틀린 키로 확인: Mureka 401 → YuE2 로 162초 만에 완성. 반주 다시 만들기도 실패하면 원래 곡.
 - `accompaniment`: `"mureka"` 면 YuE2 로 만든 노래의 보컬은 두고 반주만 다시(`engines/accomp.py`: Mureka 분리 $0.06 → 보컬에 맞춘 반주 $0.09 → 섞기, 실패하면 원래 곡). 요청 `"accompaniment": "mureka"|"none"` 로 한 곡만 바꿀 수 있다. 완성곡 기록 `engines.accompaniment` 에 단계·길이·반주 음량이 남는다.
 - 노래 만들기 요청에 `"engine": "<이름>"` 을 주면 그 엔진으로 만든다(없는 이름은 400). 완성곡 기록 `engines` 에 노래·표지·가사 엔진과 멜로디를 넘겼는지가 남는다. `GET /health` 의 `engines` 로 지금 설정을 본다.
 - 멜로디를 받지 않는 엔진(`caps.melody = None`)에는 곡 악보를 넘기지 않는다.

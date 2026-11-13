@@ -206,6 +206,10 @@ def _melody_midi(abc: str, max_sec: float) -> bytes | None:
 _ENGINES: dict[str, type[SongEngine]] = {"yue2": Yue2, "mureka": Mureka, "mureka_remix": MurekaRemix}
 
 
+# 외부 엔진이 실패하면 대신 쓰는 로컬 엔진(server._run_final_now). 이 PC 에서만 돌아 잔액·한도·네트워크와 무관하다
+FALLBACK = "yue2"
+
+
 def names() -> list[str]:
     return list(_ENGINES)
 
