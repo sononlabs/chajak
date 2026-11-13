@@ -28,6 +28,7 @@ from aiohttp import web
 
 import comfy as C
 import engines
+import engines.accomp as ACC
 import engines.cover as CE
 import engines.song as SE
 from engines import llm
@@ -616,15 +617,21 @@ async def start_final(request):
             "melody_weight": int(min(100, max(0, int(body.get("melody_weight", 80))))),
             "style_weight": int(min(100, max(0, int(body.get("style_weight", 50))))),
             "follow_mood": body.get("follow_mood", True) is not False}
-    # 노래 엔진: 비우면 엔진 설정(~/.chajak/engines.json)의 song. 비교 시험(bench_engines.py)은 요청마다 이름을 준다.
-    # 작업을 만들 때 이름을 정해 두어, 도중에 설정을 바꿔도 이 작업은 같은 엔진으로 끝난다
-    try:
-        opts["engine"] = SE.get(str(body.get("engine", "")).strip() or None).name
-    except engines.EngineError as e:
-        raise ApiError(400, "BAD_OPTION", str(e))
     if opts["voice"].startswith("rap"):  # 랩은 허밍 악보를 따르게 하면 노래처럼 불렀다(초당 2.2자) — 악보 없이, 멜로디 느낌 장르도 쓰지 않는다
         opts["melody_weight"] = min(opts["melody_weight"], 20)
         opts["follow_mood"] = False
+    # 노래 엔진: 비우면 엔진 설정(~/.chajak/engines.json)의 song. 비교 시험(bench_engines.py)은 요청마다 이름을 준다.
+    # "AI가 새로"(멜로디 없이, 랩·연주곡 빼고)는 song_new 가 있으면 그 엔진 — 멜로디를 따르지 않는 엔진도 이 모드엔 맞다(51번 7-2, 2026-11-14).
+    # 작업을 만들 때 이름을 정해 두어, 도중에 설정을 바꿔도 이 작업은 같은 엔진으로 끝난다
+    name = str(body.get("engine", "")).strip() or None
+    if not name and opts["melody_weight"] < REFERENCE_FROM and opts["voice"] in ("auto", "female", "male"):
+        name = engines.config().get("song_new") or None
+    try:
+        opts["engine"] = SE.get(name).name
+    except engines.EngineError as e:
+        raise ApiError(400, "BAD_OPTION", str(e))
+    # 반주 다시 만들기(노래를 만든 뒤 보컬만 남기고 반주를 새로): 비우면 설정의 accompaniment. 비교 시험은 요청마다 준다
+    opts["accompaniment"] = _option(body, "accompaniment", ACC.NAMES, ACC.default())
     if body.get("talk"):  # 대화로 가사 만들기: /v1/talk 가 정리해 준 이야기를 가사에 넣는다
         opts["talk"] = T.sanitize(body.get("talk"))
     # 다시 만들기: 이전 버전을 바탕으로 가중치·주제·가사·스타일만 바꾼다
@@ -816,6 +823,16 @@ async def _run_final_now(app, job: dict, song: dict):
             seconds=plan["seconds"] + 8, seed=seed, temperature=w["temperature"], cfg_scale=w["cfg_scale"],
             prefix=f"chajak_server/{song['id']}_final"))
         raw, ext = made.audio, made.ext
+        # 반주 다시 만들기: 멜로디를 따라 부르는 로컬 엔진(YuE2)의 보컬은 두고 반주만 바꾼다. 실패하면 원래 곡 그대로
+        acc_info = None
+        # (앱 진행 표시는 '노래 부르는 중' 그대로 — 앱 단계 이름표에 새 단계가 없다)
+        if opts.get("accompaniment", "none") != "none" and sung and engine.name == "yue2":
+            try:
+                raw, acc_info = await ACC.redo(raw, style, opts["accompaniment"])
+                ext = "flac"
+            except Exception as e:
+                acc_info = {"error": f"{type(e).__name__}: {e}"[:300]}
+                print("반주 다시 만들기 실패(원래 곡으로):", acc_info["error"], flush=True)
         try:  # 앞 25ms 페이드 인 · 끝 페이드 아웃 · 최대 음량 -1dBFS(처음 지지직·잘림 방지, 2026-11-11). 결과는 FLAC
             raw, mst = await asyncio.get_running_loop().run_in_executor(None, mastering.master, raw)
             job["mastering"] = mst
@@ -836,7 +853,8 @@ async def _run_final_now(app, job: dict, song: dict):
                      "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
                      # 어떤 엔진으로 만들었는지(엔진 비교·다시 만들기 추적). 표지를 지킨 다시 만들기는 표지 엔진 없음
                      "engines": {"song": engine.name, "song_info": made.info, "melody_used": use_abc,
-                                 "cover": cover_engine.name if cover_engine else None, "lyrics": llm.describe("lyrics")},
+                                 "cover": cover_engine.name if cover_engine else None, "lyrics": llm.describe("lyrics"),
+                                 "accompaniment": acc_info},
                      "mood": _mood_view(mood) and {**_mood_view(mood), "genre_applied": bool(melody_mood.style_for(mood, job["prompt"])["genre"])},
                      "melody_abc": src}
             fresh["finals"] = fresh.get("finals", []) + [final]

@@ -34,7 +34,7 @@ cd server
 단계마다 쓰는 모델은 `engines/` 가 고른다. 설정은 `~/.chajak/engines.json`(저장소 밖 — API 키가 들어갈 수 있다)이고, 요청마다 다시 읽어 서버를 다시 켜지 않아도 바뀐다. 파일이 없으면 지금 구성 그대로다.
 
 ```json
-{"song": "yue2", "cover": "zimage",
+{"song": "yue2", "song_new": null, "accompaniment": null, "cover": "zimage",
  "llm": {"lyrics": "ollama/gemma3:12b", "talk": "ollama/gemma3:12b", "melody": "ollama/qwen3:14b"},
  "keys": {}}
 ```
@@ -45,12 +45,16 @@ cd server
 | 표지 | `engines/cover.py` | `zimage`, `qwen2512` | `CoverEngine.draw` |
 | 가사·대화 요약·멜로디 다시 쓰기 | `engines/llm.py` | `ollama/<모델>` | `_BACKENDS` 에 함수 하나 |
 
+- `song_new`: "내 멜로디: AI가 새로"(멜로디 없이, 랩·연주곡 빼고) 노래만 다른 엔진으로(예: `"mureka"` — 멜로디를 따르지 않는 엔진도 이 모드엔 맞다). 2026-11-14 부터 이 PC 설정은 `mureka`.
+- `accompaniment`: `"mureka"` 면 YuE2 로 만든 노래의 보컬은 두고 반주만 다시(`engines/accomp.py`: Mureka 분리 $0.06 → 보컬에 맞춘 반주 $0.09 → 섞기, 실패하면 원래 곡). 요청 `"accompaniment": "mureka"|"none"` 로 한 곡만 바꿀 수 있다. 완성곡 기록 `engines.accompaniment` 에 단계·길이·반주 음량이 남는다.
 - 노래 만들기 요청에 `"engine": "<이름>"` 을 주면 그 엔진으로 만든다(없는 이름은 400). 완성곡 기록 `engines` 에 노래·표지·가사 엔진과 멜로디를 넘겼는지가 남는다. `GET /health` 의 `engines` 로 지금 설정을 본다.
 - 멜로디를 받지 않는 엔진(`caps.melody = None`)에는 곡 악보를 넘기지 않는다.
-- 비교 시험: `python bench_engines.py --engines yue2,<새 엔진> [--hum a.wav b.wav] [--seconds 60]` — 같은 허밍·같은 가사·같은 표지로 엔진만 바꿔 만들고, 걸린 시간·길이·**멜로디 F1**(결과를 SheetSage2 로 다시 받아 적어 넘긴 악보와 비교)·**가사 CER**(whisper 로 받아 적어 부른 순서의 가사와 비교)을 `결과.md`·`결과.json` 에, 엔진 이름을 가린 듣기용 파일과 `답지.json` 을 함께 남긴다. 시험 곡은 끝나면 지운다(`--keep` 이면 남김).
+- 비교 시험: `python bench_engines.py --engines yue2,yue2+acc,<새 엔진>`(`+acc` = 반주만 다시) · 예전 표기 `python bench_engines.py --engines yue2,<새 엔진> [--hum a.wav b.wav] [--seconds 60]` — 같은 허밍·같은 가사·같은 표지로 엔진만 바꿔 만들고, 걸린 시간·길이·**멜로디 F1**(결과를 SheetSage2 로 다시 받아 적어 넘긴 악보와 비교)·**가사 CER**(whisper 로 받아 적어 부른 순서의 가사와 비교)을 `결과.md`·`결과.json` 에, 엔진 이름을 가린 듣기용 파일과 `답지.json` 을 함께 남긴다. 시험 곡은 끝나면 지운다(`--keep` 이면 남김).
 - 2026-11-13 첫 실행(YuE2, 허밍 1개, 60초 곡): 만드는 데 156초 · 노래 70.8초 · 멜로디 F1 0.819(전주 7.3초 뒤, 한 옥타브 아래) · 가사 CER 0.067.
 - 2026-11-13 YuE2 ↔ Mureka(같은 허밍·가사·표지, 60초 설정): YuE2 154초 · 70.8초 · 멜로디 F1 0.87 · 가사 CER 0.095 / Mureka 35초 · 83초 · 멜로디 F1 0.12 · 가사 CER 0.60(가사는 그대로 불렀다 — Mureka 가 돌려준 가사 줄이 우리 가사와 같음). Mureka 의 멜로디 업로드는 '따라 부르기'가 아니라 '아이디어'로 쓰인다(전주 18초 뒤 새 구성). 곡당 $0.15.
 - 2026-11-13 YuE2 ↔ Mureka 리믹스(곡 악보 연주 65.5초를 올림): YuE2 153초 · 71초 · 멜로디 F1 0.94 · CER 0.105 / 리믹스 128초 · **170초**(스스로 늘림) · 멜로디 F1 0.06 · CER 0.26. 리믹스도 우리 멜로디를 따르지 않고 새 곡으로 부른다(가사는 더 또렷).
+- 2026-11-14 YuE2 ↔ YuE2+반주 다시(같은 가사·표지, YuE2 는 두 번 따로 만듦): YuE2 155초 · 멜로디 F1 0.94 · CER 0.146 / +반주 176초 · F1 0.38 · CER 0.101(보컬은 그대로라 가사는 또렷, 멜로디 점수는 새 반주가 SheetSage2 받아 적기를 흔든 것인지 확인 필요 — 귀로 판단). 반주 음량 -7.4dB, 길이 보컬과 같음(70.9초). 곡당 $0.15.
+- 2026-11-14 "AI가 새로" → Mureka 확인: 89초 · 173초(60초를 골라도 Mureka 는 120초 미만 길이를 못 받아 스스로 정함).
 
 ## API
 

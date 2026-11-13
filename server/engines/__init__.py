@@ -5,6 +5,8 @@
 
     {
       "song": "yue2",
+      "song_new": null,                        # "내 멜로디: AI가 새로"(멜로디 없이) 노래만 다른 엔진으로, 예: "mureka". null 이면 song
+      "accompaniment": null,                   # 노래를 만든 뒤 반주만 다시: null | "mureka"(보컬 분리 → 보컬에 맞춘 반주 → 섞기)
       "cover": "zimage",                      # zimage | qwen2512
       "llm": {"lyrics": "ollama/gemma3:12b",   # 가사·제목·스타일·말로 바꾸기
               "talk": "ollama/gemma3:12b",     # 대화 요약
@@ -23,6 +25,8 @@ CONFIG = Path(os.environ.get("CHAJAK_ENGINES", Path.home() / ".chajak" / "engine
 # 예전 환경변수(CHAJAK_LYRICS_MODEL 등)도 기본값으로 계속 따른다
 DEFAULTS = {
     "song": "yue2",
+    "song_new": None,
+    "accompaniment": None,
     "cover": os.environ.get("CHAJAK_COVER_MODEL", "zimage"),
     "llm": {"lyrics": "ollama/" + os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b"),
             "talk": "ollama/" + os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b"),
@@ -61,4 +65,4 @@ def key(name: str) -> str:
 def summary() -> dict:
     """지금 쓰는 엔진 이름들(키는 빼고) — /health 와 완성곡 기록용."""
     c = config()
-    return {"song": c["song"], "cover": c["cover"], "llm": dict(c["llm"])}
+    return {"song": c["song"], "song_new": c.get("song_new"), "accompaniment": c.get("accompaniment"), "cover": c["cover"], "llm": dict(c["llm"])}

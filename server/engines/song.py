@@ -75,7 +75,7 @@ class Mureka(SongEngine):
     TAGS = {"verse": "Verse", "chorus": "Chorus", "bridge": "Bridge", "intro": "Intro", "outro": "Outro", "pre-chorus": "Pre-Chorus"}
 
     def eta(self, seconds: float) -> int:
-        return round(60 + 90)  # 곡 구성·가사·표지 약 60초 + 생성(첫 시험 전 어림)
+        return round(60 + 40)  # 곡 구성·가사·표지 약 60초 + 생성(2026-11-13 시험: 가사→노래 약 35초)
 
     def _session(self):
         import aiohttp
