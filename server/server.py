@@ -159,7 +159,7 @@ def _track_view(song: dict, t: dict, base: str) -> dict:
 def song_view(song: dict) -> dict:
     base = f"/v1/songs/{song['id']}"
     out = {k: v for k, v in song.items() if k not in ("tracks", "ai", "final", "finals")}
-    view = lambda f: {**{k: v for k, v in f.items() if k not in ("abc", "file", "cover")},
+    view = lambda f: {**{k: v for k, v in f.items() if k not in ("abc", "form_abc", "file", "cover")},
                       "audio_url": f"{base}/final/audio?v={f.get('id', '')}", "cover_url": f"{base}/final/cover?v={f.get('id', '')}"}
     if song.get("final"):
         out["final"] = view(song["final"])
@@ -743,8 +743,12 @@ async def _run_final_now(app, job: dict, song: dict):
         reference = REFERENCE_FROM <= opts["melody_weight"] < KEEP_FROM
         first = song["tracks"][0]
         src = first["abc"]
-        if same_form and bool(base.get("reference")) == reference:
-            abc, plan = base["abc"], base["plan"]
+        reuse = same_form and bool(base.get("reference")) == reference
+        if reuse:
+            # 가사 맞추기 전 곡 악보에서 다시 시작한다. 예전엔 가사에 이미 맞춘 악보(base["abc"])를 같은 가사에 또 맞춰
+            # 다시 만들 때마다 음표가 합쳐졌다(2026-11-14 저장된 33개 버전 중 22개가 바뀌고 2개는 오류 — 154→136음 등).
+            # form_abc 가 없는 예전 버전은 맞춘 악보를 쓰되, 가사가 같으면 아래에서 다시 맞추지 않는다
+            abc, plan = base.get("form_abc") or base["abc"], base["plan"]
             src = base.get("melody_abc") or src
         else:
             if reference:  # 허밍은 참고만: AI 가 다시 쓴 8마디로 2분 곡을 만든다
@@ -778,7 +782,10 @@ async def _run_final_now(app, job: dict, song: dict):
         if rap:  # 모델이 붙인 R&B·Lo-fi 같은 태그가 힙합 느낌을 흐려서(2026-11-10) 랩 태그만 쓴다
             words["style"] = lyrics.RAP_STYLE
             words["sections"] = lyrics.rap_clean(words["sections"])
-        if sung and not rap:  # 가사가 정해지면 줄마다 음표 수 = 한글 글자 수로 맞춘다(다음 줄 글자를 당겨 부르지 않게)
+        # 가사 맞추기 전 곡 악보 — 완성곡에 남겨 다음 다시 만들기가 여기서 시작한다. 예전 버전을 그대로 쓰면(맞춘 악보뿐) 남기지 않는다
+        form_abc = abc if not reuse or base.get("form_abc") else None
+        already_fit = reuse and not base.get("form_abc") and words["sections"] == base.get("lyrics")
+        if sung and not rap and not already_fit:  # 가사가 정해지면 줄마다 음표 수 = 한글 글자 수로 맞춘다(다음 줄 글자를 당겨 부르지 않게)
             try:
                 abc, job["lyric_fit"] = lyricfit.fit(abc, plan, words["sections"])
             except Exception as e:
@@ -825,7 +832,7 @@ async def _run_final_now(app, job: dict, song: dict):
                      "title": words["title"], "style": style, "scene": words["cover"],
                      "lyrics": words["sections"] if sung else {}, "lyrics_text": text, "syllable_miss": words["miss"], "plan": plan, "seed": seed,
                      "duration_sec": round(sf.info(d / audio_file).duration, 2), "seconds": round(time.time() - job["created"], 1),
-                     "file": audio_file, "cover": cover_file, "created": _now_iso(), "abc": abc,
+                     "file": audio_file, "cover": cover_file, "created": _now_iso(), "abc": abc, "form_abc": form_abc,
                      "edit": remix.get("edit"), "edit_summary": job.get("edit_summary"),
                      # 어떤 엔진으로 만들었는지(엔진 비교·다시 만들기 추적). 표지를 지킨 다시 만들기는 표지 엔진 없음
                      "engines": {"song": engine.name, "song_info": made.info, "melody_used": use_abc,
