@@ -77,48 +77,87 @@ class Mureka(SongEngine):
     def eta(self, seconds: float) -> int:
         return round(60 + 90)  # 곡 구성·가사·표지 약 60초 + 생성(첫 시험 전 어림)
 
-    async def generate(self, cf, req):
+    def _session(self):
         import aiohttp
         from . import key
-        headers = {"Authorization": "Bearer " + key("mureka")}
-        lyrics = re.sub(r"\[([a-z\-]+)\d*\]", lambda m: f"[{self.TAGS.get(m.group(1), m.group(1).title())}]", req.lyrics)
-        body = {"lyrics": lyrics[:5000], "model": self.MODEL, "n": 1}
+        return aiohttp.ClientSession(headers={"Authorization": "Bearer " + key("mureka")}, timeout=aiohttp.ClientTimeout(total=120))
+
+    def _lyrics(self, req: SongRequest) -> str:
+        return re.sub(r"\[([a-z\-]+)\d*\]", lambda m: f"[{self.TAGS.get(m.group(1), m.group(1).title())}]", req.lyrics)[:5000]
+
+    async def _upload(self, s, data: bytes, filename: str, purpose: str, ctype: str) -> str:
+        import aiohttp
+        form = aiohttp.FormData()
+        form.add_field("purpose", purpose)
+        form.add_field("file", data, filename=filename, content_type=ctype)
+        async with s.post(self.API + "/v1/files/upload", data=form) as r:
+            return (await _ok(r))["id"]
+
+    async def _run(self, s, path: str, body: dict, info: dict) -> SongResult:
+        """작업 넣기 → 끝날 때까지 기다리기(3초 간격, 최대 10분) → 첫 곡 받기(FLAC 우선)."""
+        import aiohttp
+        async with s.post(self.API + path, json=body) as r:
+            task = await _ok(r)
+        info["task_id"] = task["id"]
+        for _ in range(200):
+            if task.get("status") in ("succeeded", "failed", "timeouted", "cancelled"):
+                break
+            await asyncio.sleep(3)
+            async with s.get(f"{self.API}/v1/song/query/{task['id']}") as r:
+                task = await _ok(r)
+        if task.get("status") != "succeeded" or not task.get("choices"):
+            raise EngineError(f"Mureka 노래 실패({task.get('status')}): {task.get('failed_reason', '')}")
+        choice = task["choices"][0]
+        info |= {"song_id": choice.get("id"), "duration_ms": choice.get("duration"), "lyrics_sections": choice.get("lyrics_sections")}
+        url = choice.get("flac_url") or choice.get("url")
+        async with s.get(url, timeout=aiohttp.ClientTimeout(total=300)) as r:
+            r.raise_for_status()
+            data = await r.read()
+        return SongResult(data, "flac" if url == choice.get("flac_url") else "mp3", info)
+
+    async def generate(self, cf, req):
+        body = {"lyrics": self._lyrics(req), "model": self.MODEL, "n": 1}
         gender = "female" if "female" in req.style.lower() else ("male" if "male vocal" in req.style.lower() else None)
         if gender:
             body["gender"] = gender
         if req.seconds >= 120:
             body["duration"] = int(min(300, req.seconds))
-        info = {"model": self.MODEL}
-        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=120)) as s:
+        info = {"model": self.MODEL, "mode": "melody" if req.abc else "prompt"}
+        async with self._session() as s:
             midi = _melody_midi(req.abc, self.MELODY_MAX_SEC) if req.abc else None
             if midi:
-                form = aiohttp.FormData()
-                form.add_field("purpose", "melody")
-                form.add_field("file", midi, filename="melody.mid", content_type="audio/midi")
-                async with s.post(self.API + "/v1/files/upload", data=form) as r:
-                    up = await _ok(r)
-                body["melody_id"] = up["id"]
-                info["melody_id"] = up["id"]
+                body["melody_id"] = info["melody_id"] = await self._upload(s, midi, "melody.mid", "melody", "audio/midi")
             else:
                 body["prompt"] = req.style[:1024]
-            async with s.post(self.API + "/v1/song/generate", json=body) as r:
-                task = await _ok(r)
-            info["task_id"] = task["id"]
-            for _ in range(200):  # 3초 × 200 = 10분
-                if task.get("status") in ("succeeded", "failed", "timeouted", "cancelled"):
-                    break
-                await asyncio.sleep(3)
-                async with s.get(f"{self.API}/v1/song/query/{task['id']}") as r:
-                    task = await _ok(r)
-            if task.get("status") != "succeeded" or not task.get("choices"):
-                raise EngineError(f"Mureka 노래 실패({task.get('status')}): {task.get('failed_reason', '')}")
-            choice = task["choices"][0]
-            info |= {"song_id": choice.get("id"), "duration_ms": choice.get("duration"), "lyrics_sections": choice.get("lyrics_sections")}
-            url = choice.get("flac_url") or choice.get("url")
-            async with s.get(url, timeout=aiohttp.ClientTimeout(total=300)) as r:
-                r.raise_for_status()
-                data = await r.read()
-        return SongResult(data, "flac" if url == choice.get("flac_url") else "mp3", info)
+            return await self._run(s, "/v1/song/generate", body, info)
+
+
+class MurekaRemix(Mureka):
+    """Mureka 리믹스(mureka-9.5) — 우리 곡 구성 악보를 피아노+화음+베이스로 연주한 소리를 올려(purpose=remix),
+    가사·스타일을 주고 다시 부르게 한다. 9.5 는 기악곡도 받고 '멜로디를 더 충실히' 따른다고 한다(요금 페이지). 곡당 $0.5.
+    (가사로 노래 만들기의 멜로디 업로드는 아이디어로만 쓰여 2026-11-13 비교에서 멜로디 F1 0.12 — 그래서 시험)"""
+    name = "mureka_remix"
+    caps = {"melody": "full", "style": True, "seed": False, "gpu": False}
+
+    async def generate(self, cf, req):
+        if not req.abc:  # 멜로디를 쓰지 않는 설정이면 리믹스할 소리가 없다 → 가사로 노래 만들기
+            return await super().generate(cf, req)
+        import io
+        import numpy as np
+        import soundfile as sf
+        tempo, _ = C.abc_header(req.abc)
+        out = await cf.run(C.abc_graph(req.abc, "GM 0 Grand Piano", True, tempo, 0, req.prefix + "_guide"))
+        y, sr = sf.read(io.BytesIO(await cf.fetch_audio(out, "save")), dtype="float32")
+        if len(y) < 11 * sr:  # 리믹스는 10초 이상
+            y = np.concatenate([y, np.zeros((11 * sr - len(y),) + y.shape[1:], np.float32)])
+        buf = io.BytesIO()
+        sf.write(buf, y, sr, format="MP3")
+        info = {"model": self.MODEL, "mode": "remix", "guide_sec": round(len(y) / sr, 1)}
+        async with self._session() as s:
+            info["upload_id"] = await self._upload(s, buf.getvalue(), "guide.mp3", "remix", "audio/mpeg")
+            body = {"upload_audio_id": info["upload_id"], "lyrics": self._lyrics(req), "model": self.MODEL, "n": 1,
+                    "prompt": req.style[:1024] or "pop, vocal"}
+            return await self._run(s, "/v1/song/remix", body, info)
 
 
 async def _ok(r) -> dict:
@@ -164,7 +203,7 @@ def _melody_midi(abc: str, max_sec: float) -> bytes | None:
         b"MTrk" + len(trk).to_bytes(4, "big") + bytes(trk)
 
 
-_ENGINES: dict[str, type[SongEngine]] = {"yue2": Yue2, "mureka": Mureka}
+_ENGINES: dict[str, type[SongEngine]] = {"yue2": Yue2, "mureka": Mureka, "mureka_remix": MurekaRemix}
 
 
 def names() -> list[str]:
