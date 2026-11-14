@@ -4,7 +4,7 @@
 
 **운전 중 흥얼거린 멜로디를 가사와 앨범 표지가 있는 나만의 노래로 만드는 Pleos Connect 차량용 앱.**
 
-2026 현대자동차·기아 Pleos Playground 차량용 앱 개발 공모전 출품작
+2026 [현대자동차그룹 차량용 앱 개발 공모전](https://appdevchallenge.auto-hmg.io/guide/overview) 출품작
 
 ![Android](https://img.shields.io/badge/Android-API%2028%2B-3DDC84?logo=android&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-JDK%2017-7F52FF?logo=kotlin&logoColor=white) ![Pleos Connect](https://img.shields.io/badge/Pleos%20Connect-Music%20%26%20Audio-333333)
 
@@ -22,7 +22,7 @@
 
 ## 실행 방법
 
-1. Android Studio에서 Pleos Connect 에뮬레이터를 구성하고 실행합니다. 호스트 PC에 마이크를 연결한 뒤 에뮬레이터의 **Virtual microphone uses host audio input**을 켭니다.
+1. [Pleos Connect Emulator 설치 및 실행 가이드](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/setup-connect-sdk-emulator)에 따라 Android Studio에서 에뮬레이터를 구성하고 실행합니다. 호스트 PC에 마이크를 연결한 뒤 에뮬레이터의 **Virtual microphone uses host audio input**을 켭니다.
 2. ComfyUI `custom_nodes`에 [`comfyui-node/pleos_melody_instrument`](comfyui-node/pleos_melody_instrument)를 설치하고 SheetSage2·YuE2·표지 생성 모델을 준비합니다. Ollama에는 `gemma3:12b`를 준비합니다.
 3. 별도 터미널에서 ComfyUI와 차작 서버를 차례로 실행합니다. `<ComfyUI 경로>`와 Python 실행 파일은 로컬 설치에 맞게 바꿉니다.
 
