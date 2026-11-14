@@ -2977,7 +2977,8 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 zones(button("← 내 멜로디") { showSong(false) },
-                    listOf(button(if (playing == key) "■  멈춤" else "▶  노래 듣기", Btn.SECONDARY) { nowPlaying = meta; toggle(key, f.getString("audio_url")) }),
+                    // 글자 없이 아이콘만(2026-11-14 사용자) — ▶ 재생 / ■ 멈춤(누르면 처음으로 멈춘다)
+                    listOf(playButton(playing == key, "노래") { nowPlaying = meta; toggle(key, f.getString("audio_url")) }),
                     button("처음부터") { stopPlayback(); nowPlaying = meta; toggle(key, f.getString("audio_url")) })
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -4346,6 +4347,18 @@ class MainActivity : Activity() {
             isEnabled = enabled
             setOnClickListener { onClick() }
         }
+
+    /** 재생/멈춤 아이콘만 있는 큰 버튼(진회색 · Large 높이 100, 폭 200). what = 화면 읽기용 대상 이름("노래" → "노래 듣기"/"노래 멈춤"). */
+    private fun playButton(playing: Boolean, what: String, onClick: () -> Unit) = ImageView(this).apply {
+        setImageResource(if (playing) R.drawable.ic_stop else R.drawable.ic_play)
+        imageTintList = ColorStateList.valueOf(Color.WHITE)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(26), dp(26), dp(26), dp(26))
+        background = pressable(round(GRAY_600, Size.LARGE.radius), round(GRAY_700, Size.LARGE.radius))
+        contentDescription = "$what ${if (playing) "멈춤" else "듣기"}"
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(dp(200), dp(Size.LARGE.height))
+    }
 
     /** Pleos Icon button(Basic · Medium 80×80). 아이콘 자산 대신 글리프를 쓴다. desc = 화면 낭독 이름(글리프는 읽어 줄 말이 없다). */
     private fun iconButton(glyph: String, desc: String, onClick: () -> Unit) = text(glyph, TITLE, TEXT).apply {
