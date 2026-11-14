@@ -1,47 +1,87 @@
-# 차구석 작곡가 (차작)
+# CHAJAK | 차작 (차구석 작곡가)
 
-운전하며 흥얼거린 한 소절을, 오늘 드라이브를 주제로 한 2분짜리 내 노래(가사·앨범 표지 포함)로 만들어 주는 Pleos Connect 차량용 작곡 앱.
-2026 현대자동차·기아 Pleos Playground 차량용 앱 개발 공모전 출품작.
+![banner](./docs/banner.jpeg)
 
-## 흐름 — 4단계
+**운전 중 흥얼거린 멜로디를 가사와 앨범 표지가 있는 나만의 노래로 만드는 Pleos Connect 차량용 앱.**
 
-**흥얼거리기 → 내 멜로디 → 노래 만들기 → 완성**
+2026 현대자동차·기아 Pleos Playground 차량용 앱 개발 공모전 출품작
 
-1. **흥얼거리기** — 큰 버튼 하나(녹음 시작 → 3·2·1 → 녹음 완료/취소, 스티어링휠 재생·일시정지 키로도 완료). 듣던 음악(폰 블루투스 포함)은 녹음할 때만 멈췄다 이어진다. 지금 내는 음이 음역 막대·파형에 보이고 내 음역대가 쌓인다.
-2. **내 멜로디** — 허밍을 음표로 바꿔 2~4초 만에 연주. 원본 ↔ 변환 비교, AI 제안, 다듬기, 더 만들기(악기·겹쳐 부르기·변주).
-3. **노래 만들기** — 주제는 오늘 드라이브로 미리 채워진다(🎲·🎤로 바꾸기). "노래 만들기" 한 번으로 2분 곡 구성·가사·표지·노래(약 3분).
-4. **완성** — 표지·가사(지금 줄 강조)·버전, AI 제안, 말로 바꾸기("더 신나게, 멜로디는 살려줘").
+![Android](https://img.shields.io/badge/Android-API%2028%2B-3DDC84?logo=android&logoColor=white) ![Kotlin](https://img.shields.io/badge/Kotlin-JDK%2017-7F52FF?logo=kotlin&logoColor=white) ![Pleos Connect](https://img.shields.io/badge/Pleos%20Connect-Music%20%26%20Audio-333333)
 
-## 폴더
+## 심사용 실행 정보
 
-| 폴더 | 내용 |
-|---|---|
-| `app/` | Android(Kotlin) 차량 앱 — 설명은 [app/README.md](app/README.md) |
-| `app/apk/` | 빌드해 둔 APK. 기본 서버 = 같은 PC `10.0.2.2:8790`, 앱 안에서 바꿀 수 있음 |
-| `server/` | 차작 서버(aiohttp) — API 는 [server/README.md](server/README.md) |
-| `comfyui-node/pleos_melody_instrument/` | ComfyUI 노드: 허밍 정리·악보·사운드폰트 연주·변주·2분 곡 구성 |
+| 항목 | 내용 |
+| --- | --- |
+| 앱 이름 | **차작 (차구석 작곡가)** |
+| 설치 APK | [`app/apk/chajak-0.4.11-drive.apk`](app/apk/chajak-0.4.11-drive.apk) |
+| Pleos Connect 에뮬레이터 | **v2.1.0**, Android API 34 시스템 이미지 |
+| 화면 규격 | **2560 × 1440 px**, **160 dpi** (`adb shell wm size` / `adb shell wm density`) |
+| 기본 서버 | `http://10.0.2.2:8790` (에뮬레이터에서 호스트 PC 접속) |
 
-## 실행 순서
+> APK는 저장소에 포함되어 있습니다. 멜로디·노래 생성에는 별도 서버 실행이 필요합니다.
 
-1. ComfyUI 에 `comfyui-node/pleos_melody_instrument` 를 `custom_nodes` 로 넣고 켠다(SheetSage2·YuE2·Qwen-Image-2512(+Lightning 4단계 LoRA) 모델 필요. Z-Image Turbo 로 바꾸려면 `CHAJAK_COVER_MODEL=zimage`).
-2. Ollama 에 `gemma3:12b` 를 받아 둔다(가사·말로 바꾸기).
-3. `server/` 에서 `python server.py --port 8790`.
-4. Pleos Connect 에뮬레이터에 `app/apk/*.apk` 설치(`adb install -r --user 10 …`).
+## 실행 방법
 
-## 협업자 시험 — 앱만(GPU 없이)
+1. Android Studio에서 Pleos Connect 에뮬레이터를 구성하고 실행합니다. 호스트 PC에 마이크를 연결한 뒤 에뮬레이터의 **Virtual microphone uses host audio input**을 켭니다.
+2. ComfyUI `custom_nodes`에 [`comfyui-node/pleos_melody_instrument`](comfyui-node/pleos_melody_instrument)를 설치하고 SheetSage2·YuE2·표지 생성 모델을 준비합니다. Ollama에는 `gemma3:12b`를 준비합니다.
+3. 별도 터미널에서 ComfyUI와 차작 서버를 차례로 실행합니다. `<ComfyUI 경로>`와 Python 실행 파일은 로컬 설치에 맞게 바꿉니다.
 
-노래를 만드는 서버(ComfyUI·GPU)는 서버 PC 한 대에서만 돌린다. 협업자는 앱만 설치해 그 서버에 붙는다.
-
-1. Android Studio 로 **Pleos Connect 에뮬레이터**를 만든다(Pleos Playground 안내대로).
-2. `app/apk/chajak-0.4.10-drive.apk` 설치:
    ```bash
-   adb install -r --user 10 app/apk/chajak-0.4.10-drive.apk
+   cd '<ComfyUI 경로>'
+   python main.py --listen 127.0.0.1 --port 8188 --disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument
    ```
-3. 앱 왼쪽 아래 **⚙ 설정** 탭 → **서버 연결**에 서버 PC 가 알려 준 주소(예: `https://….trycloudflare.com`)를 넣고 **연결 확인 후 저장**. "● 연결됐어요"가 뜨면 된다.
-4. 녹음하려면 PC 에 마이크가 있어야 하고, 에뮬레이터 설정 → Microphone 의 **"Virtual microphone uses host audio input"** 을 켠다. 소리가 전혀 안 들어오면 앱이 "마이크에서 소리가 전혀 들어오지 않아요"라고 알려 준다.
 
-## 라이선스·권리
+   ```bash
+   cd server
+   python server.py --port 8790
+   ```
 
-- 노래 엔진 **YuE2 는 비상업(CC BY-NC)** — 공모전 시연용. 상용은 다른 엔진으로 바꾼다.
-- 시연·시험 음악은 모두 이 앱으로 만든 것. 사용자 녹음·곡(`server/storage`)은 저장소에 넣지 않는다.
-- 이 저장소는 작업 폴더에서 `sync.sh` 로 가져온 사본이다.
+4. 저장소 루트에서 APK를 설치하고 실행합니다.
+
+   ```bash
+   adb install -r --user 10 app/apk/chajak-0.4.11-drive.apk
+   adb shell am start --user 10 -n ai.sonon.chajak/.MainActivity
+   ```
+
+5. 앱의 **⚙ 설정 → 서버 연결**에서 주소를 확인하고 **연결 확인 후 저장**합니다. 같은 PC의 서버는 기본 주소를 사용하고, 다른 PC의 서버는 접근 가능한 주소로 변경합니다.
+
+앱을 직접 빌드할 때는 JDK 17과 Android SDK Platform 36을 준비합니다. 프로젝트는 Gradle Wrapper 9.1.0과 Android Gradle Plugin 9.0.1을 사용합니다.
+
+```bash
+cd app
+./gradlew assembleDebug
+# 결과: app/build/outputs/apk/debug/app-debug.apk
+```
+
+## 테스트 환경 및 필수 설정
+
+| 항목 | 요구 사항 및 확인 상태 |
+| --- | --- |
+| Android | 최소 API 28, 빌드 SDK 36. 테스트 에뮬레이터: **Pleos Connect v2.1.0**, Android API 34 시스템 이미지 |
+| JDK·빌드 | JDK 17, Gradle 9.1.0, Android Gradle Plugin 9.0.1 |
+| 권한 | 녹음 시 `RECORD_AUDIO` 허용. 재생 음원 캡처는 별도 사용자 동의가 필요합니다. 미디어 재생·마이크 서비스와 알림 권한은 매니페스트에 선언되어 있습니다. |
+| 서버 의존성 | Python 서버의 `aiohttp`, `numpy`, `soundfile` 등과 ComfyUI 생성 노드·모델, Ollama `gemma3:12b`가 필요합니다. **실제 설치 버전과 GPU 구성은 확인 필요** |
+| API 키·토큰 | 로컬 기본 실행에 외부 API 키는 필요하지 않습니다. 공유 서버 인증 시 서버의 `CHAJAK_TOKEN` 또는 `~/.chajak/token`과 앱 빌드 옵션 `-PchajakToken=...`에 같은 토큰을 지정합니다. |
+| 화면 | 에뮬레이터 측정값: **2560 × 1440 px, 160 dpi** (`adb shell wm size`, `adb shell wm density`) |
+
+원격 서버 주소를 APK에 포함하려면 `app/`에서 `./gradlew assembleDebug -PchajakServer=https://example.dev`로 빌드합니다. 앱 설정 화면에서도 서버 주소를 변경할 수 있습니다.
+
+## 사용자 흐름
+
+![차작 사용자 흐름: 흥얼거리기 → 내 멜로디 → 노래 만들기 → 완성](docs/user-flow.svg)
+
+## 시스템 구성
+
+![차작 시스템 구성: Pleos Connect 앱, API 서버, ComfyUI, Ollama, 저장소](docs/architecture.svg)
+
+앱은 `CarUxRestrictions`에 따라 주행 중 녹음과 글자 입력을 제한합니다. Media3 `MediaLibraryService`로 차량 미디어 센터·스티어링휠 제어·검색을 연결하고, Audio Focus로 기존 음악 재생과 앱 소리를 조정합니다. 주요 API는 `GET /health`, `POST /v1/songs`, `POST /v1/songs/{id}/final`, `GET /v1/jobs/{job_id}`입니다. 생성된 곡은 `server/storage/`에 저장됩니다.
+
+| 경로 | 역할 |
+| --- | --- |
+| [`app/`](app/) | Android 앱 소스, Gradle 설정, 설치 APK |
+| [`server/`](server/) | aiohttp API, 생성 작업 관리, 음원 저장 |
+| [`comfyui-node/pleos_melody_instrument/`](comfyui-node/pleos_melody_instrument/) | ComfyUI 생성 노드 |
+
+## 라이선스 및 데이터
+
+YuE2는 비상업용 **CC BY-NC** 라이선스의 시연용 생성 엔진입니다. 사용자 녹음과 생성 곡은 `server/storage/`에 저장되며 제출 저장소에 포함하지 않습니다.

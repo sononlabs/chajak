@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="486" viewBox="0 0 1280 486" role="img" aria-labelledby="title desc">
+  <title id="title">차작 시스템 구성도</title>
+  <desc id="desc">Pleos Connect 앱이 HTTP API로 차작 서버와 통신하고, 서버가 ComfyUI와 Ollama를 호출하며 곡과 작업 상태를 저장하는 구조</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#EEF2F7"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#1C2B45" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#8090A7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrow-reverse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+      <path d="M7 1 L1 4 L7 7" fill="none" stroke="#8090A7" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="486" rx="24" fill="url(#background)"/>
+  <g font-family="Pretendard, Apple SD Gothic Neo, Noto Sans CJK KR, sans-serif">
+    <text x="48" y="52" fill="#162238" font-size="22" font-weight="700">차작 시스템 구성</text>
+    <text x="48" y="79" fill="#66758B" font-size="14">차량 앱 · API 서버 · 로컬 생성 엔진</text>
+
+    <g filter="url(#shadow)">
+      <rect x="48" y="174" width="264" height="188" rx="18" fill="#FFFFFF"/>
+      <rect x="418" y="146" width="320" height="244" rx="18" fill="#FFFFFF"/>
+      <rect x="844" y="112" width="388" height="112" rx="18" fill="#FFFFFF"/>
+      <rect x="844" y="242" width="388" height="96" rx="18" fill="#FFFFFF"/>
+      <rect x="844" y="356" width="388" height="96" rx="18" fill="#FFFFFF"/>
+    </g>
+
+    <rect x="68" y="194" width="72" height="24" rx="12" fill="#EAF4FF"/>
+    <text x="104" y="211" text-anchor="middle" fill="#3879C7" font-size="12" font-weight="700">CLIENT</text>
+    <text x="68" y="254" fill="#162238" font-size="22" font-weight="700">Pleos Connect 앱</text>
+    <text x="68" y="283" fill="#58677B" font-size="15">Kotlin · Media3</text>
+    <text x="68" y="309" fill="#58677B" font-size="15">녹음 · 재생 · 주행 규제</text>
+    <text x="68" y="335" fill="#58677B" font-size="15">차량 미디어 제어</text>
+
+    <rect x="438" y="166" width="72" height="24" rx="12" fill="#F1EBFF"/>
+    <text x="474" y="183" text-anchor="middle" fill="#7954BB" font-size="12" font-weight="700">SERVER</text>
+    <text x="438" y="225" fill="#162238" font-size="22" font-weight="700">차작 API 서버</text>
+    <text x="438" y="254" fill="#58677B" font-size="15">Python · aiohttp</text>
+    <path d="M438 275 H718" stroke="#E5EAF0"/>
+    <text x="438" y="305" fill="#58677B" font-size="15">요청·생성 작업 관리</text>
+    <text x="438" y="331" fill="#58677B" font-size="15">음원 믹스·결과 제공</text>
+    <text x="438" y="357" fill="#58677B" font-size="15">/v1/songs · /v1/jobs</text>
+
+    <rect x="864" y="130" width="80" height="24" rx="12" fill="#FFF0ED"/>
+    <text x="904" y="147" text-anchor="middle" fill="#DE614B" font-size="12" font-weight="700">GENERATION</text>
+    <text x="864" y="181" fill="#162238" font-size="19" font-weight="700">ComfyUI</text>
+    <text x="864" y="206" fill="#58677B" font-size="14">허밍 전사 · 편곡 · 노래 · 표지</text>
+    <text x="1210" y="147" text-anchor="end" fill="#8A98AA" font-size="12">pleos_melody_instrument</text>
+
+    <rect x="864" y="260" width="58" height="24" rx="12" fill="#E5F7F0"/>
+    <text x="893" y="277" text-anchor="middle" fill="#258562" font-size="12" font-weight="700">LLM</text>
+    <text x="864" y="312" fill="#162238" font-size="19" font-weight="700">Ollama</text>
+    <text x="1210" y="312" text-anchor="end" fill="#58677B" font-size="14">가사 · 자연어 수정</text>
+
+    <rect x="864" y="374" width="72" height="24" rx="12" fill="#EDF1F6"/>
+    <text x="900" y="391" text-anchor="middle" fill="#64758C" font-size="12" font-weight="700">STORAGE</text>
+    <text x="864" y="426" fill="#162238" font-size="19" font-weight="700">server/storage/</text>
+    <text x="1210" y="426" text-anchor="end" fill="#58677B" font-size="14">곡 · 음원 · 작업 상태</text>
+
+    <text x="365" y="240" text-anchor="middle" fill="#64758C" font-size="13" font-weight="700">HTTP API</text>
+    <text x="791" y="160" text-anchor="middle" fill="#64758C" font-size="12">생성 요청</text>
+    <text x="791" y="270" text-anchor="middle" fill="#64758C" font-size="12">텍스트 요청</text>
+    <text x="791" y="402" text-anchor="middle" fill="#64758C" font-size="12">저장·조회</text>
+  </g>
+
+  <g fill="none" stroke="#8090A7" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M322 269 H406" marker-start="url(#arrow-reverse)" marker-end="url(#arrow)"/>
+    <path d="M750 172 H832" marker-start="url(#arrow-reverse)" marker-end="url(#arrow)"/>
+    <path d="M750 290 H832" marker-start="url(#arrow-reverse)" marker-end="url(#arrow)"/>
+    <path d="M750 405 H832" marker-start="url(#arrow-reverse)" marker-end="url(#arrow)"/>
+  </g>
+</svg>
