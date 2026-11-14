@@ -1,4 +1,4 @@
-"""멜로디 성격 분석 시험(서버 없이): python test_mood.py
+"""멜로디 성격 분석 시험(서버 없이): python tests/test_mood.py
 
 1) 칸마다 만든 예시 멜로디가 그 칸으로 나오는지
 2) 프롬프트 맞춤(스타일 태그·멜로디 카드)이 기대대로인지
@@ -11,6 +11,8 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import melody_mood as M
 import melody_notes
@@ -88,7 +90,7 @@ def prompt() -> None:
 
 
 def storage() -> None:
-    root = Path(__file__).parent / "storage"
+    root = Path(__file__).resolve().parents[1] / "server" / "storage"
     rows = []
     for p in root.glob("*/song.json"):
         song = json.loads(p.read_text(encoding="utf-8"))
