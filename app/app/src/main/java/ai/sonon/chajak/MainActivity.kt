@@ -665,7 +665,9 @@ class MainActivity : Activity() {
             }, 4).withMargin(fill = true))
             }
         }, ::showMusicList, tabs = true, header = {
-            addView(titleRow(headline("내 노래"), segmented(listOf("타일", "리스트"), if (tiles) 0 else 1, width = 360) {
+            // 보기 전환은 글자 대신 작은 아이콘 두 개(2026-11-14 사용자)
+            addView(titleRow(headline("내 노래"), iconToggle(listOf(R.drawable.ic_view_tile to "타일로 보기", R.drawable.ic_view_list to "리스트로 보기"),
+                                                         if (tiles) 0 else 1) {
                 prefs.edit().putString(MUSIC_VIEW, if (it == 0) "tile" else "list").apply(); showMusicList()
             }))
             addView(body(if (songs.isEmpty()) "아직 완성된 노래가 없어요. 녹음실에서 흥얼거리고 노래 만들기를 눌러 보세요."
@@ -4368,6 +4370,25 @@ class MainActivity : Activity() {
                 background = if (on) round(SURFACE, 24) else pressable(round(Color.TRANSPARENT, 24), round(TINT_PRESSED, 24))
                 setOnClickListener { onPick(i) }
             }, LinearLayout.LayoutParams(0, dp(84), 1f))
+        }
+    }
+
+    /** 작은 아이콘 고르기(알약 안 아이콘 버튼). 고른 쪽은 흰 바탕·진한 아이콘, 나머지는 옅게. 누르는 칸 64dp. */
+    private fun iconToggle(icons: List<Pair<Int, String>>, selected: Int, onPick: (Int) -> Unit) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        background = round(TINT, 24)
+        setPadding(dp(6), dp(6), dp(6), dp(6))
+        icons.forEachIndexed { i, (res, label) ->
+            val on = i == selected
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(res)
+                imageTintList = ColorStateList.valueOf(if (on) TEXT else TEXT3)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                background = if (on) round(SURFACE, 18) else pressable(round(Color.TRANSPARENT, 18), round(TINT_PRESSED, 18))
+                contentDescription = label + if (on) " (지금)" else ""
+                setOnClickListener { if (!on) onPick(i) }
+            }, LinearLayout.LayoutParams(dp(64), dp(64)).apply { if (i > 0) marginStart = dp(4) })
         }
     }
 

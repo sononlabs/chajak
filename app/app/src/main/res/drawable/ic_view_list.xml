@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 리스트로 보기: 작은 네모 + 긴 줄 셋. ic_stop 과 같은 48 그리드 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#FF000000"
+        android:pathData="M8,10 h6 a1.5,1.5 0 0 1 1.5,1.5 v4 a1.5,1.5 0 0 1 -1.5,1.5 h-6 a1.5,1.5 0 0 1 -1.5,-1.5 v-4 a1.5,1.5 0 0 1 1.5,-1.5 z
+                          M20,11.5 h19 a2,2 0 0 1 0,4 h-19 a2,2 0 0 1 0,-4 z
+                          M8,21.5 h6 a1.5,1.5 0 0 1 1.5,1.5 v4 a1.5,1.5 0 0 1 -1.5,1.5 h-6 a1.5,1.5 0 0 1 -1.5,-1.5 v-4 a1.5,1.5 0 0 1 1.5,-1.5 z
+                          M20,23 h19 a2,2 0 0 1 0,4 h-19 a2,2 0 0 1 0,-4 z
+                          M8,33 h6 a1.5,1.5 0 0 1 1.5,1.5 v4 a1.5,1.5 0 0 1 -1.5,1.5 h-6 a1.5,1.5 0 0 1 -1.5,-1.5 v-4 a1.5,1.5 0 0 1 1.5,-1.5 z
+                          M20,34.5 h19 a2,2 0 0 1 0,4 h-19 a2,2 0 0 1 0,-4 z" />
+</vector>

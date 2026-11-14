@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 타일로 보기: 모서리 둥근 네모 넷(2×2). ic_stop 과 같은 48 그리드 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#FF000000"
+        android:pathData="M10,8 h9 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-9 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z
+                          M29,8 h9 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-9 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z
+                          M10,27 h9 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-9 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z
+                          M29,27 h9 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-9 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z" />
+</vector>
