@@ -36,8 +36,8 @@ android {
     }
     buildTypes {
         getByName("release") {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = false  // 2026-11-15: 축소(R8) 빌드에서 노래 재생이 BUFFERING 에 멈춰 끔
+            isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("upload")?.let { signingConfig = it }
         }
