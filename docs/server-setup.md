@@ -2,34 +2,9 @@
 
 이 문서는 **서버 운영자용**입니다. 심사위원은 저장소의 APK를 설치해 앱을 확인합니다. API 서버, ComfyUI, Ollama와 모델은 호스트 서버에서만 실행합니다.
 
-## 0. 운영 PC 구성(심사 기간 실제 환경, 2026-11-15)
-
-| 항목 | 내용 |
-| --- | --- |
-| OS · GPU | Windows 11 · NVIDIA GeForce RTX 5070 Ti 16GB |
-| ComfyUI | StabilityMatrix 패키지, 가상환경 `venv` (Python 3.10.11), 포트 8188 |
-| 차작 API | 포트 8790, 접근 토큰 켬, 터널로 외부 공개 |
-| Ollama | `gemma3:12b`(가사·제목·대화 요약), `qwen3:14b`(AI 멜로디), 포트 11434 |
-| 노래 · 표지 | YuE2 3B int8(노래), Z-Image Turbo nvfp4(표지), SheetSage2(허밍 전사), GeneralUser GS(악기) |
-| 대화 받아쓰기 | faster-whisper `mobiuslabsgmbh/faster-whisper-large-v3-turbo`(로컬 파일) |
-| 선택 외부 API | Mureka(**AI가 새로** 노래만, 실패하면 YuE2) |
-
-운영 PC에서 실제로 쓰는 실행 명령(Windows PowerShell):
-
-```powershell
-# ComfyUI
-cd <StabilityMatrix>\Data\Packages\ComfyUI
-.\venv\Scripts\python.exe main.py --port 8188 --disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument
-# 차작 API (같은 Python)
-cd <차작 저장소>\server
-<StabilityMatrix>\Data\Packages\ComfyUI\venv\Scripts\python.exe server.py
-```
-
-새 호스트를 처음 준비할 때는 아래 1~4절을 따릅니다.
-
 ## 1. 호스트 준비
 
-- [ComfyUI](https://github.com/Comfy-Org/ComfyUI)와 호환되는 Python 가상환경을 준비합니다. API 실행은 Python 3.10(운영 PC)과 3.13에서 확인했습니다. 노래 생성은 GPU와 충분한 메모리가 필요합니다.
+- [ComfyUI](https://github.com/Comfy-Org/ComfyUI)와 호환되는 Python 가상환경을 준비합니다. 운영 PC(Windows 11, RTX 5070 Ti 16GB, StabilityMatrix ComfyUI)는 Python 3.10.11, 별도 환경은 Python 3.13에서 API 실행을 확인했습니다. 노래 생성은 GPU와 충분한 메모리가 필요합니다.
 - ComfyUI `custom_nodes`에 [`pleos_melody_instrument`](../comfyui-node/pleos_melody_instrument/)를 복사하거나 링크합니다.
 - ComfyUI의 Python 환경에 공식 `requirements.txt`, `tinysoundfont`, 이 저장소의 [`requirements-server.txt`](../requirements-server.txt)를 설치합니다. 다운로드 캐시를 남기지 않으려면 `pip install --no-cache-dir`를 사용합니다. 별도 Python 환경을 쓰면 해당 환경에도 서버 의존성을 설치합니다.
 
@@ -60,28 +35,9 @@ ollama pull gemma3:12b
 ollama list
 ```
 
-디스크가 작은 호스트에서는 `CHAJAK_LYRICS_MODEL`로 더 작은 모델을 지정할 수 있습니다. 1B 모델은 시험에서 가사 품질이 낮고 AI 멜로디가 규칙 기반 결과로 돌아가므로 심사용으로 권장하지 않습니다. `CHAJAK_MELODY_MODEL`(또는 아래 엔진 설정의 `llm.melody`)을 따로 지정할 때만 두 번째 Ollama 모델을 받습니다. 운영 PC는 음계 숫자를 더 안정적으로 다루는 `qwen3:14b`를 멜로디에 따로 씁니다. 대화 받아쓰기 기능은 별도 `faster-whisper` 패키지와 `CHAJAK_STT_MODEL`의 로컬 모델 파일이 필요합니다.
+디스크가 작은 호스트에서는 `CHAJAK_LYRICS_MODEL`로 더 작은 모델을 지정할 수 있습니다. 1B 모델은 시험에서 가사 품질이 낮고 AI 멜로디가 규칙 기반 결과로 돌아가므로 심사용으로 권장하지 않습니다. `CHAJAK_MELODY_MODEL`을 따로 지정할 때만 두 번째 Ollama 모델을 받습니다. 운영 PC는 AI 멜로디에 `qwen3:14b`를 따로 씁니다. 대화 받아쓰기 기능은 별도 `faster-whisper` 패키지와 `CHAJAK_STT_MODEL`의 로컬 모델 파일(기본 `mobiuslabsgmbh/faster-whisper-large-v3-turbo`)이 필요합니다.
 
-## 2. 엔진 설정과 접근 토큰(선택)
-
-설정 파일은 모두 **저장소 밖** `~/.chajak/`에 두고 커밋하지 않습니다.
-
-- **접근 토큰** `~/.chajak/token`(또는 환경변수 `CHAJAK_TOKEN`): 있으면 `/health`를 뺀 모든 요청에 `X-Chajak-Token` 헤더가 필요합니다. 외부(터널)에 열 때는 반드시 켭니다. 없으면 인증 없이 동작합니다(로컬 시험용). 제출 APK에는 운영 서버의 토큰이 들어 있습니다.
-- **엔진 설정** `~/.chajak/engines.json`(경로는 `CHAJAK_ENGINES`로 바꿀 수 있음): 단계마다 쓸 모델·API를 고릅니다. 요청마다 다시 읽으므로 서버를 다시 켜지 않아도 됩니다. 파일이 없으면 위의 로컬 구성(YuE2 · Ollama · Z-Image)만 씁니다.
-
-   ```json
-   {
-     "song": "yue2",
-     "song_new": "mureka",
-     "cover": "zimage",
-     "llm": {"melody": "ollama/qwen3:14b"},
-     "keys": {"mureka": "<Mureka API 키>"}
-   }
-   ```
-
-   `song_new`는 **내 멜로디 → AI가 새로**(멜로디를 따르지 않는 노래)에만 쓰는 엔진입니다. Mureka는 내 멜로디를 따르지 못해 **그대로 / AI가 다듬기**는 항상 YuE2로 만듭니다. Mureka 키가 없거나 한도·오류로 실패하면 그 곡은 YuE2로 자동 전환되고, 곡 정보의 `engines.fallback`에 이유가 남습니다. `/health`의 `engines`에서 지금 구성을 볼 수 있습니다.
-
-## 3. 실행
+## 2. 실행
 
 터미널을 나눠 Ollama, ComfyUI, 차작 API 순서로 시작합니다. 아래 Python은 ComfyUI 의존성이 설치된 환경의 실행 파일을 뜻합니다.
 
@@ -101,7 +57,7 @@ cd '<차작 저장소 경로>'
 
 Windows에서는 두 실행 명령의 `.venv/bin/python`을 `.venv\\Scripts\\python.exe`로 바꿉니다. ComfyUI와 Ollama가 다른 주소에 있으면 서버의 `--comfy http://HOST:8188`와 `CHAJAK_OLLAMA=http://HOST:11434`를 설정합니다. 노드 경로를 자동으로 찾지 못하면 `CHAJAK_NODES`에 `pleos_melody_instrument` 폴더를 지정합니다. 생성 곡과 녹음은 `server/storage/`에 저장됩니다.
 
-## 4. 확인과 심사용 연결
+## 3. 확인과 심사용 연결
 
 ```bash
 curl http://127.0.0.1:8790/health
@@ -110,6 +66,6 @@ curl http://127.0.0.1:8790/health
 
 `/health`의 `ok: true`는 API와 차작 ComfyUI 노드 연결을 뜻합니다. 실제 생성 확인에는 **5초 이상의 허밍 녹음**으로 `tests/test_api.py`를 실행합니다. 서버 없이 API·저장 경로만 점검하려면 같은 Python으로 `tests/test_e2e_mock.py`를 실행합니다.
 
-**심사용 운영:** 운영 PC에서 위 세 가지를 켜 두고, 터널로 `127.0.0.1:8790`을 외부에 엽니다. 접근 토큰을 반드시 켜고, 제출 APK의 기본 주소는 이 터널 주소입니다. 터널 주소가 바뀌면 APK를 다시 만들어야 하므로 심사 기간에는 PC와 터널을 끄지 않습니다.
+심사 기간에는 운영 PC에서 위 서버를 켜 두고 터널로 외부에 엽니다. 제출 APK의 기본 주소는 이 터널 주소이고, 서버는 `~/.chajak/token`(또는 `CHAJAK_TOKEN`)의 접근 토큰을 확인합니다(토큰 파일이 없으면 인증 없이 동작). **AI가 새로** 노래에 외부 API를 쓰려면 `~/.chajak/engines.json`에 `"song_new": "mureka"`와 키를 넣으며, 키가 없거나 실패하면 YuE2로 만듭니다. 두 파일은 저장소에 넣지 않습니다.
 
-**직접 시험:** 에뮬레이터를 실행한 PC에서 서버를 켰다면 앱 **⚙ 설정 → 서버 연결**(정차 중)에서 주소를 `http://10.0.2.2:8790`으로 바꿉니다. `10.0.2.2`는 에뮬레이터에서 본 호스트 PC입니다.
+직접 시험할 때는 에뮬레이터를 실행하는 호스트 PC에서 서버를 켜고, 앱 **설정 → 서버 연결**에서 주소를 `http://10.0.2.2:8790`으로 바꿉니다.
