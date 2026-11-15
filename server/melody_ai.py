@@ -1,6 +1,6 @@
 """허밍 멜로디를 '참고만' 해서 더 좋은 8마디 멜로디로 다시 쓴다(멜로디가 단순할 때).
 
-LLM(엔진 설정 llm.melody, 기본 이 PC 의 Ollama qwen3:14b)에게 허밍 앞 4마디를 음계 칸(도=0, 레=1 … 한 옥타브 위 도=7)과 박 길이로 주고,
+LLM(엔진 설정 llm.melody, 기본값은 가사 모델과 같은 Ollama 모델 — CHAJAK_MELODY_MODEL 로 따로 지정)에게 허밍 앞 4마디를 음계 칸(도=0, 레=1 … 한 옥타브 위 도=7)과 박 길이로 주고,
 첫 동기의 리듬은 살리되 발전(반복·한 칸 위로·뒤집기)·절정(6~7마디)·으뜸음 마침이 있는 8마디를 쓰게 한다.
 마디마다 4박이 맞는지, 음계 칸 범위·도약 크기를 검사해 고치고, 두 번 다 실패하면 규칙(멜로디 완성하기)으로 대신한다.
 ABC 해석·쓰기는 ComfyUI 노드 패키지 모듈을 그대로 쓴다(melody_notes 와 같은 방식).
@@ -16,7 +16,7 @@ import types
 import aiohttp
 
 from engines import llm
-# 가사는 gemma3 로 바꿨지만(한국어), 음계 숫자 다루기는 지금까지 시험한 qwen3 를 그대로 쓴다(엔진 기본값 llm.melody)
+# 디스크가 부족한 환경에서는 가사 모델 하나만 받는다. 음계 숫자는 qwen3:14b 가 더 안정적이라 운영 PC 는 엔진 설정에서 llm.melody 로 지정한다.
 from melody_notes import NODES
 
 _pkg = types.ModuleType("pleos_nodes")

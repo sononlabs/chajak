@@ -315,7 +315,7 @@ def song_form_graph(abc: str, seconds: float, sung: bool = True) -> dict:
     }
 
 
-COVER_UNET = "Zimage\\z_image_turbo_nvfp4.safetensors"
+COVER_UNET = os.path.join("Zimage", "z_image_turbo_nvfp4.safetensors")
 COVER_CLIP = "qwen_3_4b_fp8_mixed.safetensors"
 COVER_VAE = "z_image_ae.safetensors"
 

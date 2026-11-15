@@ -1,7 +1,7 @@
 """엔진 고르기 — 단계마다 어떤 모델·API 를 쓸지(2026-11-13, 52번 문서).
 
 설정 파일 ~/.chajak/engines.json (저장소 밖 — API 키가 들어갈 수 있다). 요청마다 다시 읽으므로 서버를 다시 켜지 않아도 바뀐다.
-파일이 없거나 항목이 빠지면 지금 로컬 구성(YuE2 · Ollama gemma3/qwen3 · Z-Image)을 그대로 쓴다.
+파일이 없거나 항목이 빠지면 로컬 구성(YuE2 · Ollama gemma3:12b 하나 · Z-Image)을 쓴다.
 
     {
       "song": "yue2",
@@ -9,7 +9,7 @@
       "cover": "zimage",                      # zimage | qwen2512
       "llm": {"lyrics": "ollama/gemma3:12b",   # 가사·제목·스타일·말로 바꾸기
               "talk": "ollama/gemma3:12b",     # 대화 요약
-              "melody": "ollama/qwen3:14b"},   # AI 로 멜로디 다시 쓰기
+              "melody": "ollama/qwen3:14b"},   # AI 로 멜로디 다시 쓰기(기본은 가사 모델과 같음)
       "keys": {"mureka": "...", "anthropic": "..."}
     }
 """
@@ -28,7 +28,7 @@ DEFAULTS = {
     "cover": os.environ.get("CHAJAK_COVER_MODEL", "zimage"),
     "llm": {"lyrics": "ollama/" + os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b"),
             "talk": "ollama/" + os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b"),
-            "melody": "ollama/" + os.environ.get("CHAJAK_MELODY_MODEL", "qwen3:14b")},
+            "melody": "ollama/" + os.environ.get("CHAJAK_MELODY_MODEL", os.environ.get("CHAJAK_LYRICS_MODEL", "gemma3:12b"))},
     "keys": {},
 }
 

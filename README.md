@@ -1,47 +1,56 @@
-# 차구석 작곡가 (차작)
+# CHAJAK | 차작 (차구석 작곡가)
 
-운전하며 흥얼거린 한 소절을, 오늘 드라이브를 주제로 한 2분짜리 내 노래(가사·앨범 표지 포함)로 만들어 주는 Pleos Connect 차량용 작곡 앱.
-2026 현대자동차·기아 Pleos Playground 차량용 앱 개발 공모전 출품작.
+![차작 배너](docs/banner.jpeg)
 
-## 흐름 — 4단계
+**운전 중 흥얼거린 멜로디를 나만의 노래로 만드는 Pleos Connect 차량용 앱.**
 
-**흥얼거리기 → 내 멜로디 → 노래 만들기 → 완성**
+2026 [현대자동차그룹 차량용 앱 개발 공모전](https://appdevchallenge.auto-hmg.io/guide/overview) 출품작
 
-1. **흥얼거리기** — 큰 버튼 하나(녹음 시작 → 3·2·1 → 녹음 완료/취소, 스티어링휠 재생·일시정지 키로도 완료). 듣던 음악(폰 블루투스 포함)은 녹음할 때만 멈췄다 이어진다. 지금 내는 음이 음역 막대·파형에 보이고 내 음역대가 쌓인다.
-2. **내 멜로디** — 허밍을 음표로 바꿔 2~4초 만에 연주. 원본 ↔ 변환 비교, AI 제안, 다듬기, 더 만들기(악기·겹쳐 부르기·변주).
-3. **노래 만들기** — 주제는 오늘 드라이브로 미리 채워진다(🎲·🎤로 바꾸기). "노래 만들기" 한 번으로 2분 곡 구성·가사·표지·노래(약 3분).
-4. **완성** — 표지·가사(지금 줄 강조)·버전, AI 제안, 말로 바꾸기("더 신나게, 멜로디는 살려줘").
+## APK 설치와 확인
 
-## 폴더
+[제출 APK](app/apk/chajak-0.4.11-drive.apk)를 설치해 앱을 확인합니다. 서버와 모델은 저희가 운영하는 호스트 PC에서 심사 기간 내내 켜 두고, 제출 APK에 그 서버 주소와 접근 토큰이 들어 있습니다. **심사위원은 APK만 설치하면 되고, 서버나 모델을 설치할 필요가 없습니다.**
 
-| 폴더 | 내용 |
-|---|---|
-| `app/` | Android(Kotlin) 차량 앱 — 설명은 [app/README.md](app/README.md) |
-| `app/apk/` | 빌드해 둔 APK. 기본 서버 = 같은 PC `10.0.2.2:8790`, 앱 안에서 바꿀 수 있음 |
-| `server/` | 차작 서버(aiohttp) — API 는 [server/README.md](server/README.md) |
-| `comfyui-node/pleos_melody_instrument/` | ComfyUI 노드: 허밍 정리·악보·사운드폰트 연주·변주·2분 곡 구성 |
+| 항목 | 내용 |
+| --- | --- |
+| 앱 이름 | 차작 (차구석 작곡가) |
+| 설치 파일 | [`app/apk/chajak-0.4.11-drive.apk`](app/apk/chajak-0.4.11-drive.apk) |
+| 확인 환경 | Pleos Connect 에뮬레이터 v2.1.0, Android API 34 |
+| 권장 화면 | 2560 × 1440 px, 160 dpi |
+| 필요한 설정 | 인터넷 연결, 에뮬레이터의 호스트 마이크 입력 활성화, 앱의 녹음 권한 허용 |
 
-## 실행 순서
+1. [Pleos Connect 에뮬레이터 가이드](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/setup-connect-sdk-emulator)에 따라 에뮬레이터를 실행합니다. 녹음을 확인하려면 호스트 마이크를 연결하고 **Virtual microphone uses host audio input**을 켭니다.
+2. APK를 설치하고 앱을 시작합니다.
 
-1. ComfyUI 에 `comfyui-node/pleos_melody_instrument` 를 `custom_nodes` 로 넣고 켠다(SheetSage2·YuE2·Qwen-Image-2512(+Lightning 4단계 LoRA) 모델 필요. Z-Image Turbo 로 바꾸려면 `CHAJAK_COVER_MODEL=zimage`).
-2. Ollama 에 `gemma3:12b` 를 받아 둔다(가사·말로 바꾸기).
-3. `server/` 에서 `python server.py --port 8790`.
-4. Pleos Connect 에뮬레이터에 `app/apk/*.apk` 설치(`adb install -r --user 10 …`).
-
-## 협업자 시험 — 앱만(GPU 없이)
-
-노래를 만드는 서버(ComfyUI·GPU)는 서버 PC 한 대에서만 돌린다. 협업자는 앱만 설치해 그 서버에 붙는다.
-
-1. Android Studio 로 **Pleos Connect 에뮬레이터**를 만든다(Pleos Playground 안내대로).
-2. `app/apk/chajak-0.4.10-drive.apk` 설치:
    ```bash
-   adb install -r --user 10 app/apk/chajak-0.4.10-drive.apk
+   adb install -r --user 10 app/apk/chajak-0.4.11-drive.apk
+   adb shell am start --user 10 -n ai.sonon.chajak/.MainActivity
    ```
-3. 앱 왼쪽 아래 **⚙ 설정** 탭 → **서버 연결**에 서버 PC 가 알려 준 주소(예: `https://….trycloudflare.com`)를 넣고 **연결 확인 후 저장**. "● 연결됐어요"가 뜨면 된다.
-4. 녹음하려면 PC 에 마이크가 있어야 하고, 에뮬레이터 설정 → Microphone 의 **"Virtual microphone uses host audio input"** 을 켠다. 소리가 전혀 안 들어오면 앱이 "마이크에서 소리가 전혀 들어오지 않아요"라고 알려 준다.
 
-## 라이선스·권리
+3. 녹음을 허용하고 앱을 사용합니다. 서버 연결 상태는 앱 **⚙ 설정 → 서버 연결**에서 확인할 수 있습니다.
 
-- 노래 엔진 **YuE2 는 비상업(CC BY-NC)** — 공모전 시연용. 상용은 다른 엔진으로 바꾼다.
-- 시연·시험 음악은 모두 이 앱으로 만든 것. 사용자 녹음·곡(`server/storage`)은 저장소에 넣지 않는다.
-- 이 저장소는 작업 폴더에서 `sync.sh` 로 가져온 사본이다.
+제출 APK에는 **운영 서버 주소(터널)와 접근 토큰**이 기본값으로 들어 있어 주소를 바꿀 필요가 없습니다. 노래 한 곡은 곡 길이에 따라 3~5분쯤 걸리고, 앱이 진행 상황을 보여 줍니다.
+
+서버를 직접 실행해 시험할 때는 [호스트 서버 설치·실행 가이드](docs/server-setup.md)대로 서버를 켠 뒤, 정차 중에 **⚙ 설정 → 서버 연결**에서 주소를 `http://10.0.2.2:8790`(에뮬레이터를 실행한 PC)으로 바꿉니다.
+
+## 앱 사용 흐름
+
+![차작 사용자 흐름: 흥얼거리기 → 내 멜로디 → 노래 만들기 → 완성](docs/user-flow.svg)
+
+녹음한 허밍을 음표와 피아노 연주로 확인하고, 화음·멜로디 변주를 더한 뒤 가사·표지가 있는 노래를 만듭니다. 노래를 만들 때 내 멜로디를 **그대로 / AI가 다듬기 / AI가 새로** 중에서 고릅니다. 앱은 주행 중 녹음과 글자 입력을 제한하며, 차량 미디어 센터와 재생 제어를 연결합니다.
+
+## 구성과 개발 자료
+
+![차작 시스템 구성: Pleos Connect 앱, API 서버, ComfyUI, Ollama, 선택 외부 API(Mureka), 저장소](docs/architecture.svg)
+
+| 경로 | 역할 |
+| --- | --- |
+| [`app/`](app/) | Android 앱 소스와 제출 APK |
+| [`server/`](server/) | 호스트 API와 생성 작업 관리 |
+| [`comfyui-node/pleos_melody_instrument/`](comfyui-node/pleos_melody_instrument/) | ComfyUI 생성 노드 |
+| [`tests/`](tests/) | 서버 기능·API 시험 |
+
+서버 운영자는 [호스트 서버 설치·실행 가이드](docs/server-setup.md)를 참고합니다. 앱을 직접 빌드할 때는 JDK 17과 Android SDK Platform 36이 필요하며, `app/`에서 `./gradlew assembleDebug`를 실행합니다.
+
+## 라이선스와 데이터
+
+YuE2는 비상업용 **CC BY-NC** 라이선스의 시연용 생성 엔진입니다. **AI가 새로**를 고른 노래는 선택 외부 API인 Mureka로 만들 수 있으며, 키가 없거나 한도·오류로 실패하면 YuE2로 자동 전환합니다. 사용자 녹음과 생성 곡은 호스트의 `server/storage/`에 저장되며 제출 저장소에 포함하지 않습니다.

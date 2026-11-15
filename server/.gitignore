@@ -1,5 +1,0 @@
-# 사용자 곡·녹음(개인 데이터)과 시험 결과는 저장소에 넣지 않는다
-storage/
-test_output/
-__pycache__/
-*.pyc

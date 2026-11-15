@@ -1,12 +1,13 @@
 """차작 서버 API 시험: 실제 허밍 녹음으로 곡 만들기 → 오류 → 변주(화음·다듬기). 시험 곡은 끝에 지운다.
 
-python test_api.py [--server http://127.0.0.1:8790]
-허밍 파일: ComfyUI input 폴더의 chajak_user_hum5.wav. 토큰은 ~/.chajak/token(있으면).
+python tests/test_api.py --hum /path/to/hum.wav [--server http://127.0.0.1:8790]
+허밍 파일은 5초 이상의 실제 녹음. 토큰은 ~/.chajak/token(있으면).
 """
 
 import argparse
 import asyncio
 import io
+import sys
 import time
 from pathlib import Path
 
@@ -14,7 +15,6 @@ import aiohttp
 import numpy as np
 import soundfile as sf
 
-HUMS = Path(r"F:\StabilityMatrix-win-x64\Data\Packages\ComfyUI\input")
 OUT = Path(__file__).parent / "test_output"
 TOKEN_FILE = Path.home() / ".chajak" / "token"
 
@@ -34,7 +34,7 @@ def silence_wav(sec=6.0, sr=48000) -> bytes:
     return b.getvalue()
 
 
-async def main(server: str):
+async def main(server: str, hum: Path):
     OUT.mkdir(exist_ok=True)
     ok = True
     made = []
@@ -53,7 +53,7 @@ async def main(server: str):
             check("instruments", len(inst) >= 100, f"{len(inst)}개")
 
         t = time.perf_counter()
-        async with s.post("/v1/songs", data=form(HUMS / "chajak_user_hum5.wav", instrument="GM 0 Grand Piano", melody="그대로", accompaniment="true")) as r:
+        async with s.post("/v1/songs", data=form(hum, instrument="GM 0 Grand Piano", melody="그대로", accompaniment="true")) as r:
             song = await r.json()
             dt = time.perf_counter() - t
             check("곡 만들기(반주)", r.status == 201, f"{dt:.1f}s · 템포 {song.get('tempo')} · 조성 {song.get('key')} · 화음 {song['tracks'][0]['chords'] if r.status == 201 else song}")
@@ -83,7 +83,7 @@ async def main(server: str):
         async with s.get("/v1/variations") as r:
             variations = (await r.json())["variations"]
             check("변주 목록", len(variations) == 4, " · ".join(v["name"] for v in variations))
-        async with s.post("/v1/songs", data=form(HUMS / "chajak_user_hum5.wav")) as r:
+        async with s.post("/v1/songs", data=form(hum)) as r:
             vid = (await r.json())["id"]
             made.append(vid)
         for v in variations:
@@ -104,9 +104,12 @@ async def main(server: str):
                 check(f"시험 곡 지우기 {i}", r.status == 200)
 
     print("\n전체", "PASS" if ok else "FAIL", "· 결과 음원:", OUT)
+    return ok
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", default="http://127.0.0.1:8790")
-    asyncio.run(main(ap.parse_args().server))
+    ap.add_argument("--hum", type=Path, required=True, help="5초 이상의 실제 허밍 WAV 파일")
+    args = ap.parse_args()
+    sys.exit(0 if asyncio.run(main(args.server, args.hum)) else 1)

@@ -2,7 +2,7 @@
 
 실행: python server.py [--port 8790] [--comfy http://127.0.0.1:8188]
 에뮬레이터에서는 http://10.0.2.2:8790 으로 접속한다.
-API 설명: README.md
+프로젝트 및 API 개요: ../README.md
 """
 
 from __future__ import annotations
