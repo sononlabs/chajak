@@ -14,12 +14,9 @@ copy() {  # copy <원본> <대상> <제외…>
   tar -C "$src" "${ex[@]}" -cf - . | tar -C "$dst" -xf -
 }
 
-copy "$APP" "$here/app" ./README.md build .gradle .kotlin local.properties '*.iml' .idea .probe './chajak_*.png' './chajak_테스트_패키지*'
+copy "$APP" "$here/app" ./README.md build .gradle .kotlin local.properties '*.iml' .idea .probe './chajak_*.png' './chajak_테스트_패키지*' ./apk
 copy "$SERVER" "$here/server" ./README.md storage test_output __pycache__ '*.pyc' '*.log' 'test_*.py' 'requirements*.txt' .gitignore
 copy "$NODE" "$here/comfyui-node/pleos_melody_instrument" __pycache__ '*.pyc'
-# 작업 폴더의 APK 에는 서버 토큰(~/.chajak/token)이 들어 있다 — 기본으로는 저장소의 APK 를 그대로 둔다(2026-11-11).
-# 최종 APK 를 넣을 때만 TAKE_APK=1 bash sync.sh
-if [ "${TAKE_APK:-0}" != 1 ]; then
-  git -C "$here" checkout -- app/apk && git -C "$here" clean -fq -- app/apk
-fi
+# 제출 APK 는 저장소 맨 위 apk/ 에 손으로 넣는다(공식 규칙: apk/팀명_앱이름_release.apk, release 빌드).
+# 작업 폴더의 apk/·디버그 APK 에는 서버 토큰이 들어 있을 수 있어 가져오지 않는다.
 echo "동기화 끝: app · server · comfyui-node"

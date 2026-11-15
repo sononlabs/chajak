@@ -8,12 +8,12 @@
 
 ## APK 설치와 확인
 
-[제출 APK](app/apk/chajak-0.5.0.apk)를 설치해 앱을 확인합니다. 서버와 모델은 저희 호스트 서버에서 심사 기간 내내 운영하며 심사 기기에 설치할 필요가 없습니다.
+[제출 APK](apk/B형브라더스_차작_release.apk)를 설치해 앱을 확인합니다. 서버와 모델은 저희 호스트 서버에서 심사 기간 내내 운영하며 심사 기기에 설치할 필요가 없습니다.
 
 | 항목 | 내용 |
 | --- | --- |
 | 앱 이름 | 차작 (차구석 작곡가) |
-| 설치 파일 | [`app/apk/chajak-0.5.0.apk`](app/apk/chajak-0.5.0.apk) |
+| 설치 파일 | [`apk/B형브라더스_차작_release.apk`](apk/B형브라더스_차작_release.apk) |
 | 확인 환경 | Pleos Connect 에뮬레이터 v2.1.0, Android API 34 |
 | 권장 화면 | 2560 × 1440 px, 160 dpi |
 | 필요한 설정 | 인터넷 연결, 에뮬레이터의 호스트 마이크 입력 활성화, 앱의 녹음 권한 허용 |
@@ -22,7 +22,7 @@
 2. APK를 설치하고 앱을 시작합니다.
 
    ```bash
-   adb install -r --user 10 app/apk/chajak-0.5.0.apk
+   adb install -r --user 10 apk/B형브라더스_차작_release.apk
    adb shell am start --user 10 -n ai.sonon.chajak/.MainActivity
    ```
 
@@ -42,7 +42,8 @@
 
 | 경로 | 역할 |
 | --- | --- |
-| [`app/`](app/) | Android 앱 소스와 제출 APK |
+| [`apk/`](apk/) | 제출 APK(release) |
+| [`app/`](app/) | Android 앱 소스 |
 | [`server/`](server/) | 호스트 API와 생성 작업 관리 |
 | [`comfyui-node/pleos_melody_instrument/`](comfyui-node/pleos_melody_instrument/) | ComfyUI 생성 노드 |
 | [`tests/`](tests/) | 서버 기능·API 시험 |
