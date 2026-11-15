@@ -2,6 +2,31 @@
 
 이 문서는 **서버 운영자용**입니다. 심사위원은 저장소의 APK를 설치해 앱을 확인합니다. API 서버, ComfyUI, Ollama와 모델은 호스트 서버에서만 실행합니다.
 
+## 0. 운영 PC 구성(심사 기간 실제 환경, 2026-11-15)
+
+| 항목 | 내용 |
+| --- | --- |
+| OS · GPU | Windows 11 · NVIDIA GeForce RTX 5070 Ti 16GB |
+| ComfyUI | StabilityMatrix 패키지, 가상환경 `venv` (Python 3.10.11), 포트 8188 |
+| 차작 API | 포트 8790, 접근 토큰 켬, 터널로 외부 공개 |
+| Ollama | `gemma3:12b`(가사·제목·대화 요약), `qwen3:14b`(AI 멜로디), 포트 11434 |
+| 노래 · 표지 | YuE2 3B int8(노래), Z-Image Turbo nvfp4(표지), SheetSage2(허밍 전사), GeneralUser GS(악기) |
+| 대화 받아쓰기 | faster-whisper `mobiuslabsgmbh/faster-whisper-large-v3-turbo`(로컬 파일) |
+| 선택 외부 API | Mureka(**AI가 새로** 노래만, 실패하면 YuE2) |
+
+운영 PC에서 실제로 쓰는 실행 명령(Windows PowerShell):
+
+```powershell
+# ComfyUI
+cd <StabilityMatrix>\Data\Packages\ComfyUI
+.\venv\Scripts\python.exe main.py --port 8188 --disable-all-custom-nodes --whitelist-custom-nodes pleos_melody_instrument
+# 차작 API (같은 Python)
+cd <차작 저장소>\server
+<StabilityMatrix>\Data\Packages\ComfyUI\venv\Scripts\python.exe server.py
+```
+
+새 호스트를 처음 준비할 때는 아래 1~4절을 따릅니다.
+
 ## 1. 호스트 준비
 
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI)와 호환되는 Python 가상환경을 준비합니다. API 실행은 Python 3.10(운영 PC)과 3.13에서 확인했습니다. 노래 생성은 GPU와 충분한 메모리가 필요합니다.
