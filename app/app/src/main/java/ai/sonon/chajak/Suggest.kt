@@ -28,18 +28,18 @@ object Suggest {
             val key = song.optJSONObject("mood")?.optJSONObject("features")?.optString("key")?.takeIf { it.isNotEmpty() }
                 ?.removeSuffix("장조")?.removeSuffix("단조") ?: song.optString("key").removeSuffix("m")
             val tonic = PCS[key]
-            if (midis.size < 10 && "finish" !in done)
-                out += Suggestion("음이 ${midis.size}개뿐이에요. 2분으로 늘리면 같은 음이 많이 반복돼요.", "멜로디 완성하기", "finish")
-            if (tonic != null && midis.last() % 12 != tonic && "finish" !in done && out.none { it.action == "finish" })
-                out += Suggestion("끝음이 으뜸음(${key})이 아니라 끝이 열려 있어요. 닫아 주면 노래의 끝맺음이 자연스러워요.", "멜로디 완성하기", "finish")
-            if (span < 5 && "rewrite" !in done)
-                out += Suggestion("음폭이 ${span}반음으로 좁아요. 후렴이 밋밋할 수 있어요.", "AI로 살리기", "rewrite")
+            // 멜로디 상세의 AI 제안은 '노래 만들기' 하나만 남겼다(2026-11-14 사용자: 다듬기·화음·다시 부르기 버튼 삭제).
+            // 멜로디에 아쉬운 점이 있으면 노래 만들기의 '내 멜로디: AI가 다듬기'를 켜고 노래 만들기로 보낸다 — 실제로 노래에 반영되는 길
+            val issue = when {
+                midis.size < 10 -> "음이 ${midis.size}개뿐이라 2분 노래에서 같은 음이 많이 반복될 수 있어요."
+                tonic != null && midis.last() % 12 != tonic -> "끝음이 으뜸음(${key})이 아니라 끝이 열려 있어요."
+                span < 5 -> "음폭이 ${span}반음으로 좁아 후렴이 밋밋할 수 있어요."
+                else -> null
+            }
+            if (issue != null) out += Suggestion("$issue AI가 다듬어서 노래로 만들어요.", "AI가 다듬어 노래 만들기", "create:polish")
         }
-        val tempo = song.optInt("tempo")
-        if (tempo > 150) out += Suggestion("템포 ${tempo}로 빨라요. 노래가 바쁘게 들릴 수 있어요.", "천천히 다시 부르기", "rehum")
-        if (tempo in 1..64) out += Suggestion("템포 ${tempo}로 느려요. 노래가 늘어질 수 있어요.", "조금 빠르게 다시 부르기", "rehum")
         if (out.isEmpty()) out += Suggestion("멜로디가 잘 잡혔어요. 이대로 노래로 만들어 보세요.", "노래 만들기 →", "create")
-        return out.take(3)
+        return out.take(1)
     }
 
     /** 4단계 완성: 노래 설정·가사 맞춤·내 음역대를 본다. */

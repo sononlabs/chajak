@@ -156,6 +156,12 @@ def _track_view(song: dict, t: dict, base: str) -> dict:
             "duration_sec": round(sf.info(STORAGE / song["id"] / t["file"]).duration, 2)}
 
 
+def shown_final(song: dict) -> dict | None:
+    """내 노래에 보일 버전: 하트를 누른 버전(2026-11-15 사용자), 없으면 가장 최근."""
+    fav = song.get("favorite")
+    return next((x for x in song.get("finals", []) if fav and x.get("id") == fav), None) or song.get("final")
+
+
 def song_view(song: dict) -> dict:
     base = f"/v1/songs/{song['id']}"
     out = {k: v for k, v in song.items() if k not in ("tracks", "ai", "final", "finals")}
@@ -444,11 +450,38 @@ async def delete_final(request):
         if cover and all(x.get("cover") != cover for x in rest):
             (d / cover).unlink(missing_ok=True)
         song["finals"] = rest
+        if song.get("favorite") == fid:
+            song.pop("favorite", None)
         if rest:
             song["final"] = rest[-1]
         else:
             song.pop("final", None); song.pop("finals", None)
         store.save(song)
+        return web.json_response(song_view(song))
+
+
+async def set_favorite(request):
+    """하트: 내 노래에 보일 버전을 고른다. {"version": 버전id} — null 이면 하트를 뗀다(가장 최근 버전이 보인다)."""
+    store: Store = request.app["store"]
+    song_id = request.match_info["song_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        raise ApiError(400, "BAD_REQUEST", "JSON 으로 보내 주세요.")
+    fid = body.get("version")
+    async with store.lock(song_id):
+        song = store.load(song_id)
+        if fid is None:
+            song.pop("favorite", None)
+        elif any(x.get("id") == fid for x in song.get("finals", [])):
+            song["favorite"] = fid
+        else:
+            raise ApiError(404, "NOT_FOUND", "그 노래 버전을 찾을 수 없어요.")
+        # 목록은 song.json 고친 시각 순 — 하트만으로 곡 순서가 바뀌지 않게 시각을 되돌린다
+        sj = store.dir(song_id) / "song.json"
+        st = sj.stat()
+        store.save(song)
+        os.utime(sj, (st.st_atime, st.st_mtime))
         return web.json_response(song_view(song))
 
 
@@ -465,6 +498,7 @@ async def list_songs(request):
         try:
             s = json.loads((d / "song.json").read_text(encoding="utf-8"))
             v = song_view(s) if s.get("final") else None
+            sf_ = shown_final(s) if v else None
         except Exception as e:
             print(f"곡 목록에서 건너뜀 {d.name}: {e}", flush=True)
             continue
@@ -476,8 +510,9 @@ async def list_songs(request):
             m = None
         out.append({"mood": {"label": m["label"], "energy": m["energy"], "key": m["features"]["key"]} if m else None, "id": s["id"], "created": s.get("created"), "tempo": s.get("tempo"), "key": s.get("key"),
                     "tracks": len(s.get("tracks", [])), "duration_sec": s.get("duration_sec"),
-                    "title": s["final"]["title"] if v else None, "cover_url": v["final"]["cover_url"] if v else None,
-                    "final_sec": s["final"].get("duration_sec") if v else None})
+                    "title": sf_["title"] if v else None,
+                    "cover_url": f"/v1/songs/{s['id']}/final/cover?v={sf_.get('id', '')}" if v else None,
+                    "final_sec": sf_.get("duration_sec") if v else None, "favorite": s.get("favorite")})
     return web.json_response({"songs": out})
 
 
@@ -1271,6 +1306,7 @@ def make_app(comfy_url: str) -> web.Application:
         web.get("/v1/songs/{song_id}/tracks/{n:\\d+}/audio", track_audio),
         web.delete("/v1/songs/{song_id}", delete_song),
         web.delete("/v1/songs/{song_id}/finals/{final_id}", delete_final),
+        web.put("/v1/songs/{song_id}/favorite", set_favorite),
         web.get("/v1/variations", variations),
         web.post("/v1/songs/{song_id}/variations", add_variation),
         web.get("/v1/jobs/{job_id}", get_job),

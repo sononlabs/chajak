@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="344" viewBox="0 0 1280 344" role="img" aria-labelledby="title desc">
   <title id="title">차작 사용자 흐름</title>
-  <desc id="desc">흥얼거리기, 내 멜로디, 노래 만들기, 완성의 네 단계로 이어지는 사용자 흐름</desc>
+  <desc id="desc">녹음하기, 내 멜로디, 노래 만들기, 완성의 네 단계로 이어지는 사용자 흐름</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1">
       <stop stop-color="#F8FAFC"/>
@@ -25,7 +25,7 @@
     <g transform="translate(48 106)">
       <rect x="20" y="20" width="46" height="46" rx="14" fill="#FFF0ED"/>
       <text x="43" y="51" text-anchor="middle" fill="#DE614B" font-size="21" font-weight="800">01</text>
-      <text x="20" y="103" fill="#162238" font-size="22" font-weight="700">흥얼거리기</text>
+      <text x="20" y="103" fill="#162238" font-size="22" font-weight="700">녹음하기</text>
       <text x="20" y="135" fill="#58677B" font-size="15">한 소절 녹음</text>
       <text x="20" y="160" fill="#58677B" font-size="15">음역·파형 실시간 표시</text>
     </g>

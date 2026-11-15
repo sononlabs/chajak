@@ -8,12 +8,12 @@
 
 ## APK 설치와 확인
 
-[제출 APK](app/apk/chajak-0.4.11-drive.apk)를 설치해 앱을 확인합니다. 서버와 모델은 저희 호스트 서버에서 심사 기간 내내 운영하며 심사 기기에 설치할 필요가 없습니다.
+[제출 APK](app/apk/chajak-0.5.0.apk)를 설치해 앱을 확인합니다. 서버와 모델은 저희 호스트 서버에서 심사 기간 내내 운영하며 심사 기기에 설치할 필요가 없습니다.
 
 | 항목 | 내용 |
 | --- | --- |
 | 앱 이름 | 차작 (차구석 작곡가) |
-| 설치 파일 | [`app/apk/chajak-0.4.11-drive.apk`](app/apk/chajak-0.4.11-drive.apk) |
+| 설치 파일 | [`app/apk/chajak-0.5.0.apk`](app/apk/chajak-0.5.0.apk) |
 | 확인 환경 | Pleos Connect 에뮬레이터 v2.1.0, Android API 34 |
 | 권장 화면 | 2560 × 1440 px, 160 dpi |
 | 필요한 설정 | 인터넷 연결, 에뮬레이터의 호스트 마이크 입력 활성화, 앱의 녹음 권한 허용 |
@@ -22,7 +22,7 @@
 2. APK를 설치하고 앱을 시작합니다.
 
    ```bash
-   adb install -r --user 10 app/apk/chajak-0.4.11-drive.apk
+   adb install -r --user 10 app/apk/chajak-0.5.0.apk
    adb shell am start --user 10 -n ai.sonon.chajak/.MainActivity
    ```
 
@@ -32,7 +32,7 @@
 
 ## 앱 사용 흐름
 
-![차작 사용자 흐름: 흥얼거리기 → 내 멜로디 → 노래 만들기 → 완성](docs/user-flow.svg)
+![차작 사용자 흐름: 녹음하기 → 내 멜로디 → 노래 만들기 → 완성](docs/user-flow.svg)
 
 녹음한 허밍을 음표와 피아노 연주로 확인하고, 화음·멜로디 변주를 더한 뒤 내 멜로디를 **그대로 / AI가 다듬기 / AI가 새로** 중에서 골라 가사·표지가 있는 노래를 만듭니다. 대화 녹음으로 가사를, 음악 녹음으로 멜로디를 얻을 수도 있고, 완성곡은 드라이브별 앨범으로 모입니다. 앱은 주행 중 글자 입력·지우기를 제한하며, 차량 미디어 센터와 재생 제어를 연결합니다.
 

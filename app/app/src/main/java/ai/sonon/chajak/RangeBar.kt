@@ -35,9 +35,10 @@ class RangeBar(context: Context, font: Typeface) : View(context) {
     private val glow = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tick = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#33131417"); strokeWidth = density * 2 }
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = font; textSize = 20 * density; color = Color.parseColor("#A3131417"); textAlign = Paint.Align.CENTER
+        typeface = font; textSize = 24 * density;  // Google AAOS 최소 24(이전 20)
+        color = Color.parseColor("#A3131417"); textAlign = Paint.Align.CENTER
     }
-    private val typeLabel = Paint(label).apply { textSize = 18 * density; color = Color.parseColor("#80131417") }
+    private val typeLabel = Paint(label).apply { textSize = 24 * density;  /* 이전 18 */ color = Color.parseColor("#80131417") }
 
     private fun x(m: Float) = paddingLeft + (m - VoiceRange.LOWEST) / (VoiceRange.HIGHEST - VoiceRange.LOWEST) * (width - paddingLeft - paddingRight)
 
@@ -67,14 +68,14 @@ class RangeBar(context: Context, font: Typeface) : View(context) {
         // C 음 눈금 + 이름, 그 아래 목소리 유형(유형 범위 가운데)
         for (m in VoiceRange.LOWEST..VoiceRange.HIGHEST step 12) {
             canvas.drawLine(x(m.toFloat()), barTop + barH + 4 * density, x(m.toFloat()), barTop + barH + 12 * density, tick)
-            canvas.drawText(VoiceRange.name(m), x(m.toFloat()), barTop + barH + 34 * density, label)
+            canvas.drawText(VoiceRange.name(m), x(m.toFloat()), barTop + barH + 40 * density, label)
         }
         range?.type()?.let { t ->
-            val y = barTop + barH + 50 * density
+            val y = barTop + barH + 56 * density
             canvas.drawLine(x(t.lo.toFloat()), y, x(t.hi.toFloat()), y, tick)
             canvas.drawLine(x(t.lo.toFloat()), y - 6 * density, x(t.lo.toFloat()), y, tick)
             canvas.drawLine(x(t.hi.toFloat()), y - 6 * density, x(t.hi.toFloat()), y, tick)
-            canvas.drawText("${t.name} 음역", x(t.center), y + 24 * density, typeLabel)
+            canvas.drawText("${t.name} 음역", x(t.center), y + 30 * density, typeLabel)
         }
 
         current?.let { target ->
@@ -89,7 +90,7 @@ class RangeBar(context: Context, font: Typeface) : View(context) {
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), (130 * density).toInt())
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), (146 * density).toInt())
     }
 
     private fun alpha(c: Int, a: Int) = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))

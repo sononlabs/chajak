@@ -39,12 +39,12 @@ class NoteRoll(context: Context, val notes: List<Note>, private val seconds: Flo
     private val laneLine = Paint().apply { color = MainActivity.TINT; strokeWidth = density }
     private val bar = Paint(Paint.ANTI_ALIAS_FLAG)
     private val head = Paint().apply { color = MainActivity.RECORDING; strokeWidth = density * 3 }
-    private val laneText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = MainActivity.TEXT3; textSize = density * 18; typeface = font }
-    private val barText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = density * 18; typeface = font }
+    private val laneText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = MainActivity.TEXT3; textSize = density * 24;  /* Google AAOS 최소 24(이전 18) */ typeface = font }
+    private val barText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.WHITE; textSize = density * 24; typeface = font }
     private val box = RectF()
 
     override fun onDraw(canvas: Canvas) {
-        val gutter = density * 56
+        val gutter = density * 64
         val pad = density * 12
         val lane = (height - 2 * pad) / (high - low + 1)
         fun top(m: Int) = pad + (high - m) * lane
@@ -52,7 +52,7 @@ class NoteRoll(context: Context, val notes: List<Note>, private val seconds: Flo
 
         for (m in low..high) {
             if (NAMES[m % 12].endsWith("♯")) canvas.drawRect(gutter, top(m), width - pad, top(m) + lane, sharpLane)
-            else if (lane >= density * 20 || m % 12 == 0) canvas.drawText(NAMES[m % 12], pad, top(m) + lane / 2 + laneText.textSize / 3, laneText)
+            else if (lane >= density * 26 || m % 12 == 0) canvas.drawText(NAMES[m % 12], pad, top(m) + lane / 2 + laneText.textSize / 3, laneText)
             if (m % 12 == 0) canvas.drawLine(gutter, top(m) + lane, width - pad, top(m) + lane, laneLine)
         }
         val now = current

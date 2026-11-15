@@ -14,7 +14,7 @@ copy() {  # copy <원본> <대상> <제외…>
   tar -C "$src" "${ex[@]}" -cf - . | tar -C "$dst" -xf -
 }
 
-copy "$APP" "$here/app" ./README.md build .gradle .kotlin local.properties '*.iml' .idea .probe
+copy "$APP" "$here/app" ./README.md build .gradle .kotlin local.properties '*.iml' .idea .probe './chajak_*.png' './chajak_테스트_패키지*'
 copy "$SERVER" "$here/server" ./README.md storage test_output __pycache__ '*.pyc' '*.log' 'test_*.py' 'requirements*.txt' .gitignore
 copy "$NODE" "$here/comfyui-node/pleos_melody_instrument" __pycache__ '*.pyc'
 # 작업 폴더의 APK 에는 서버 토큰(~/.chajak/token)이 들어 있다 — 기본으로는 저장소의 APK 를 그대로 둔다(2026-11-11).

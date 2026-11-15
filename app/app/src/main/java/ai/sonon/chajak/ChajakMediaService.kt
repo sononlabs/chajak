@@ -228,6 +228,18 @@ class ChajakMediaService : MediaLibraryService() {
 
     private inner class LibraryCallback : MediaLibraryService.MediaLibrarySession.Callback {
 
+        /**
+         * 핸들(스티어링휠) 재생·일시정지 키는 앱 화면이 아니라 이 미디어 세션으로 온다(2026-11-14 에뮬레이터 확인:
+         * 'Media button session is ai.sonon.chajak'). 녹음·카운트다운·대화 녹음 알림 화면에서는 화면이 키를 쓰게 넘긴다.
+         */
+        @OptIn(UnstableApi::class)
+        override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, intent: Intent): Boolean {
+            @Suppress("DEPRECATION")
+            val ev = intent.getParcelableExtra<android.view.KeyEvent>(Intent.EXTRA_KEY_EVENT)
+            if (ev != null && mediaKeyHook?.invoke(ev) == true) return true
+            return super.onMediaButtonEvent(session, controllerInfo, intent)
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibraryService.MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
@@ -331,6 +343,8 @@ class ChajakMediaService : MediaLibraryService() {
     }
 
     companion object {
+        /** 화면(MainActivity)이 녹음 중 핸들 키를 가져가는 고리. true = 화면이 썼다(재생 명령으로 넘기지 않음). */
+        @Volatile @JvmStatic var mediaKeyHook: ((android.view.KeyEvent) -> Boolean)? = null
         private const val TAG = "ChajakMedia"
         private const val LIBRARY_SIZE = 20
         private const val REFRESH_MS = 30_000L

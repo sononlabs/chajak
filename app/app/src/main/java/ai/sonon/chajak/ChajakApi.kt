@@ -24,6 +24,10 @@ class ChajakApi(val base: String) {
     /** 노래 한 버전 지우기 → 남은 곡 정보. */
     fun deleteFinal(songId: String, finalId: String): JSONObject = request("DELETE", "/v1/songs/$songId/finals/$finalId", null)
 
+    /** 하트: 내 노래에 보일 버전. null 이면 하트를 뗀다(가장 최근 버전이 보인다) → 곡 정보. */
+    fun setFavorite(songId: String, version: String?): JSONObject =
+        request("PUT", "/v1/songs/$songId/favorite", JSONObject().put("version", version ?: JSONObject.NULL))
+
     fun variations(): JSONObject = request("GET", "/v1/variations", null)
 
     fun instruments(): JSONObject = request("GET", "/v1/instruments", null)
